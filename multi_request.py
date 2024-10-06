@@ -4,6 +4,8 @@ import requests
 import json
 import concurrent.futures
 
+from utils import *
+
 # .env 파일에서 환경 변수를 로드합니다
 load_dotenv()
 
@@ -28,7 +30,11 @@ CATEGORYCODE_DICT = {
 VALID_OPTION_DICT = {
     200020: {
         "name": "귀걸이",
-        "valid_options": [45,46] # 공격%, 무공%
+        "valid_options": [45,46], # 공격%, 무공%
+        "valid_option_value_dict": {
+            "공격력 ": {1.55:3, 0.95:2, 0.40:1}, 
+            "무기 공격력 ": {3.00:3, 1.80:2, 0.80:1},
+        }
     },
     200010: {
         "name": "목걸이",
@@ -82,18 +88,20 @@ def make_single_api_call(page_num, option_idx):
     item_list = auction_item_dict.get("Items", {})
     item_price_list = []
     for item_info in item_list:
-        # Option 리스트에서 유효 옵션 있는지 확인 후 value에 따라서 ~
+        # Option 리스트에서 유효 옵션 있는지 확인
+        valid_option_dict = get_valid_option(item_info)
+        tot_valid_option_value = sum(valid_option_dict.values())
         buy_price = item_info["AuctionInfo"]["BuyPrice"]
         if buy_price:
-            item_price_list.append(buy_price)
+            item_price_list.append([buy_price,tot_valid_option_value])
     return item_price_list
 
 
 # page number 에 따라서 API 호출을 동시에 실행
 def make_api_calls_and_append_results():
     total_price_list = []
-
-    for option_idx in VALID_OPTION_DICT[200020]["valid_options"]:
+    item_type = 200020
+    for option_idx in VALID_OPTION_DICT[item_type]["valid_options"]:
         new_query = {
             **base_query,
             "EtcOptions": [
@@ -107,7 +115,7 @@ def make_api_calls_and_append_results():
         }
         response = requests.post(AUCTION_ITEM_URL, headers=headers, json=new_query)
         auction_item_dict = json.loads(response.text)
-        total_pages = min(auction_item_dict["TotalCount"]//10,50) # 해당하는 아이템의 최대 페이지 개수
+        total_pages = min(auction_item_dict["TotalCount"]//10,45) # 해당하는 아이템의 최대 페이지 개수
         
         # ThreadPoolExecutor를 사용하여 병렬로 API 호출을 처리
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
@@ -121,5 +129,6 @@ def make_api_calls_and_append_results():
     return total_price_list
 
 if __name__ == "__main__":
-    total = make_api_calls_and_append_results()
-    print(total)
+    total_result = make_api_calls_and_append_results()
+    with open('data.json', 'w') as f:
+        json.dump(total_result, f)

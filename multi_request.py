@@ -83,6 +83,7 @@ def make_single_api_call(page_num, option_idx):
         ],
     }
     response = requests.post(AUCTION_ITEM_URL, headers=headers, json=new_query)
+    
     # TODO: parsing 하는 부분과 request 하는 부분 다른 함수로 분리
     auction_item_dict = json.loads(response.text)
     item_list = auction_item_dict.get("Items", {})
@@ -90,10 +91,18 @@ def make_single_api_call(page_num, option_idx):
     for item_info in item_list:
         # Option 리스트에서 유효 옵션 있는지 확인
         valid_option_dict = get_valid_option(item_info)
-        tot_valid_option_value = sum(valid_option_dict.values())
         buy_price = item_info["AuctionInfo"]["BuyPrice"]
         if buy_price:
-            item_price_list.append([buy_price,tot_valid_option_value])
+            item_price_list.append(
+                [
+                    buy_price,
+                    valid_option_dict["remain_num"],
+                    valid_option_dict["quality"],
+                    valid_option_dict["trade_allow_count"],
+                    valid_option_dict.get("무기 공격력 ",0),
+                    valid_option_dict.get("공격력 ",0),
+                ]
+            )
     return item_price_list
 
 
@@ -130,5 +139,5 @@ def make_api_calls_and_append_results():
 
 if __name__ == "__main__":
     total_result = make_api_calls_and_append_results()
-    with open('data.json', 'w') as f:
+    with open('new_data.json', 'w') as f:
         json.dump(total_result, f)

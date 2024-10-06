@@ -41,9 +41,20 @@ def get_valid_option(item_info_dict:dict):
 
     # 아이템 옵션 추출
     item_option_list = item_info_dict.get("Options",[])
+    # 연마 횟수 확인
+    item_remain_num = 4 - len(item_option_list)
+    item_valid_option["remain_num"] = item_remain_num
+    # 품질
+    item_quality = item_info_dict.get("GradeQuality",0)
+    item_valid_option["quality"] = item_quality
+    # 교환가능횟수
+    item_trade_allow_count = item_info_dict.get("AuctionInfo",{}).get("TradeAllowCount",0)
+    item_valid_option["trade_allow_count"] = item_trade_allow_count
+
     for item_option in item_option_list:
         if item_option.get("Type") != "ACCESSORY_UPGRADE": continue
         if item_option.get("OptionName") in valid_option_value_dict:
+            # 유효 옵션
             cur_valid_option_value_dict = valid_option_value_dict[item_option.get("OptionName")]
             cur_option_grade = cur_valid_option_value_dict.get(item_option.get("Value"))
             if cur_option_grade:

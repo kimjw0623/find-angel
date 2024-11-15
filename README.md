@@ -37,3 +37,8 @@ evaluate function 업데이트를 lowest_price_log에서 하게 하고 싶은데
 
 1. 일단 utils.py에 최대한 모으기
 2. evaluate function 로딩 로직 개선하기
+
+# Todo(241114)
+- DB 써보기
+- 우선 lowest_price_log.py를 업데이트하는 걸로 해보고 팔찌나 돌 등도 추가해보자.
+- 꿀매물 찾기는 어차피 API limit 증가도 기다려야 하니까...

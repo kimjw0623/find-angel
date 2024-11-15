@@ -48,12 +48,12 @@ class LostArkMarketMonitor:
             # 메인 루프 (아이템 체커)
             while True:
                 try:
-                    # 새로운 매물 체크
-                    found_notable_items = self.item_checker.check_new_items()
+                    # # 새로운 매물 체크
+                    # found_notable_items = self.item_checker.check_new_items()
                     
-                    # 주목할 만한 매물이 있으면 알림음 재생
-                    if found_notable_items:
-                        self.play_alert()
+                    # # 주목할 만한 매물이 있으면 알림음 재생
+                    # if found_notable_items:
+                    #     self.play_alert()
                     
                     # 잠시 대기
                     time.sleep(2)

@@ -1,7 +1,8 @@
 import time
+import os
 from datetime import datetime, timedelta
-from utils import do_search, fix_dup_options, calc_dmg_increment_percent
-from database import PriceRecord, ItemOption
+from database import DatabaseManager, PriceRecord, ItemOption, RawItemOption
+from utils import *
 
 class ItemChecker:
     def __init__(self, db_manager):

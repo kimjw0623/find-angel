@@ -1,7 +1,12 @@
 import threading
 import time
+import os
 from datetime import datetime
-from utils import option_dict, level_enpoint, do_search, fix_dup_options, number_to_scale
+from database import *
+from utils import *
+from itertools import combinations, product
+from typing import List, Dict, Tuple, Any
+
 
 class PriceCollector(threading.Thread):
     def __init__(self, db_manager, interval=7200):  # 기본 2시간 간격
@@ -16,61 +21,8 @@ class PriceCollector(threading.Thread):
             'content-Type': 'application/json'
         }
 
-    def gen_search_data(self, grade, preset, pageNo=1):
-        """검색 데이터 생성"""
-        level = preset[0]
-        options = preset[1:]
-        
-        # 목걸이 여부 확인
-        is_necklace = any(opt[0] in ["추피", "적주피", "아덴게이지", "낙인력"] for opt in options)
-        
-        # enpoints 계산
-        if is_necklace:
-            enpoints = 4 + level_enpoint[grade][level]
-        else:
-            enpoints = 3 + level_enpoint[grade][level]
-
-        data = {
-            "ItemLevelMin": 0,
-            "ItemLevelMax": 1800,
-            "ItemGradeQuality": 60,
-            "SkillOptions": [
-                {
-                    "FirstOption": None,
-                    "SecondOption": None,
-                    "MinValue": None,
-                    "MaxValue": None
-                }
-            ],
-            "EtcOptions": [
-                {
-                    "FirstOption": 8,
-                    "SecondOption": 1,
-                    "MinValue": enpoints,
-                    "MaxValue": enpoints
-                },
-            ],
-            "Sort": "BUY_PRICE",
-            "CategoryCode": 200000,
-            "CharacterClass": "",
-            "ItemTier": 4,
-            "ItemGrade": grade,
-            "PageNo": pageNo,
-            "SortCondition": "ASC"
-        }
-
-        for option in options:
-            option_name = option[0]
-            option_level = option[1]
-            option_to_dict = {
-                "FirstOption": 7,
-                "SecondOption": option_dict[option_name],
-                "MinValue": option_level,
-                "MaxValue": option_level,
-            }
-            data["EtcOptions"].append(option_to_dict)
-
-        return data
+        # 프리셋 생성기 초기화
+        self.preset_generator = SearchPresetGenerator()
 
     def process_response(self, response, grade, part):
         """API 응답 처리 및 DB 저장"""
@@ -78,14 +30,26 @@ class PriceCollector(threading.Thread):
         if not data["Items"]:
             return None
 
+        # 유효한 아이템 필터링
+        valid_items = [
+            item for item in data["Items"]
+            if item["AuctionInfo"]["BuyPrice"] and item["GradeQuality"] >= 67
+        ]
+        if not valid_items:
+            return None
+
+        # 최저가 기준 필터링
+        min_price = min(item["AuctionInfo"]["BuyPrice"]
+                        for item in valid_items)
+        price_threshold = min_price * 1.5
+
         processed_items = []
         current_time = datetime.now()
 
-        for item in data["Items"]:
-            if not item["AuctionInfo"]["BuyPrice"] or item["GradeQuality"] < 67:
+        for item in valid_items:
+            if item["AuctionInfo"]["BuyPrice"] > price_threshold:
                 continue
 
-            # 기본 정보 구조화
             processed_item = {
                 'timestamp': current_time,
                 'grade': grade,
@@ -95,8 +59,10 @@ class PriceCollector(threading.Thread):
                 'quality': item["GradeQuality"],
                 'trade_count': item["AuctionInfo"]["TradeAllowCount"],
                 'price': item["AuctionInfo"]["BuyPrice"],
-                'end_time': datetime.strptime(item["AuctionInfo"]["EndDate"].split('.')[0], 
-                                            "%Y-%m-%dT%H:%M:%S"),
+                'end_time': datetime.strptime(
+                    item["AuctionInfo"]["EndDate"].split('.')[0],
+                    "%Y-%m-%dT%H:%M:%S"
+                ),
                 'options': [],
                 'raw_options': []
             }
@@ -104,7 +70,7 @@ class PriceCollector(threading.Thread):
             # 옵션 처리
             fix_dup_options(item)
             for option in item["Options"]:
-                if option["OptionName"] not in ["아크", "도약"]:
+                if option["OptionName"] not in ["깨달음", "도약"]:
                     opt_value = option["Value"]
                     # raw option 저장
                     processed_item['raw_options'].append({
@@ -113,8 +79,87 @@ class PriceCollector(threading.Thread):
                         'is_percentage': option.get("IsValuePercentage", False)
                     })
                     # 가공된 option 저장
-                    opt_grade = number_to_scale.get(option["OptionName"], {}).get(opt_value, 1)
-                    processed_item['options'].append((option["OptionName"], opt_grade))
+                    opt_grade = number_to_scale.get(
+                        option["OptionName"], {}).get(opt_value, 1)
+                    processed_item['options'].append(
+                        (option["OptionName"], opt_grade))
+
+            processed_items.append(processed_item)
+
+        return processed_items
+
+    def process_bracelet_response(self, response, grade):
+        """팔찌 API 응답 처리"""
+        data = response.json()
+        if not data["Items"]:
+            return None
+
+        # 유효한 아이템 필터링 (팔찌는 품질 체크 필요 없음)
+        valid_items = [
+            item for item in data["Items"]
+            if item["AuctionInfo"]["BuyPrice"]
+        ]
+        if not valid_items:
+            return None
+
+        # 최저가 기준 필터링
+        min_price = min(item["AuctionInfo"]["BuyPrice"]
+                        for item in valid_items)
+        price_threshold = min_price * 1.5
+
+        processed_items = []
+        current_time = datetime.now()
+
+        for item in valid_items:
+            if item["AuctionInfo"]["BuyPrice"] > price_threshold:
+                continue
+
+            # 기본 정보 처리
+            processed_item = {
+                'timestamp': current_time,
+                'grade': grade,
+                'name': item["Name"],
+                'trade_count': item["AuctionInfo"]["TradeAllowCount"],
+                'price': item["AuctionInfo"]["BuyPrice"],
+                'end_time': datetime.strptime(
+                    item["AuctionInfo"]["EndDate"].split('.')[0],
+                    "%Y-%m-%dT%H:%M:%S"
+                ),
+                'combat_stats': [],
+                'base_stats': [],
+                'special_effects': [],
+                'fixed_option_count': 0,  # 기본값 설정
+                'extra_option_count': 0   # 기본값 설정
+            }
+
+            # 옵션 처리
+            for option in item["Options"]:
+                option_type = option["Type"]
+                option_name = option["OptionName"]
+                value = option["Value"]
+
+                # 고정 효과 수량은 전체 옵션 개수에서 도약/깨달음 2개를 뺀 값
+                processed_item['fixed_option_count'] = len(item["Options"]) - 2
+                # 부여 효과 수량 체크
+                if option_type == "BRACELET_RANDOM_SLOT":
+                    processed_item['extra_option_count'] = value
+                # 전투특성 처리
+                elif option_type == "STAT" and option_name in ["특화", "치명", "신속"]:
+                    processed_item['combat_stats'].append({
+                        'stat_type': option_name,
+                        'value': value
+                    })
+                # 기본스탯 처리
+                elif option_type == "STAT" and option_name in ["힘", "민첩", "지능"]:
+                    processed_item['base_stats'].append({
+                        'stat_type': option_name,
+                        'value': value
+                    })
+                # 특수효과 처리
+                elif option_type == "BRACELET_SPECIAL_EFFECTS":
+                    processed_item['special_effects'].append({
+                        'effect_type': option_name
+                    })
 
             processed_items.append(processed_item)
 
@@ -136,7 +181,7 @@ class PriceCollector(threading.Thread):
                     end_time=item_data['end_time']
                 )
 
-                # 가공된 옵션 저장
+                # 옵션 저장
                 for opt_name, opt_grade in item_data['options']:
                     option = ItemOption(
                         option_name=opt_name,
@@ -155,32 +200,118 @@ class PriceCollector(threading.Thread):
 
                 session.add(record)
 
+    def save_bracelet_items(self, items):
+        """처리된 팔찌 데이터를 DB에 저장"""
+        with self.db.get_write_session() as session:
+            for item_data in items:
+                record = BraceletPriceRecord(
+                    timestamp=item_data['timestamp'],
+                    grade=item_data['grade'],
+                    name=item_data['name'],
+                    trade_count=item_data['trade_count'],
+                    price=item_data['price'],
+                    end_time=item_data['end_time'],
+                    fixed_option_count=item_data['fixed_option_count'],
+                    extra_option_count=item_data['extra_option_count']
+                )
+
+                # 전투특성 저장
+                for stat in item_data['combat_stats']:
+                    combat_stat = BraceletCombatStat(
+                        stat_type=stat['stat_type'],
+                        value=stat['value']
+                    )
+                    record.combat_stats.append(combat_stat)
+
+                # 기본스탯 저장
+                for stat in item_data['base_stats']:
+                    base_stat = BraceletBaseStat(
+                        stat_type=stat['stat_type'],
+                        value=stat['value']
+                    )
+                    record.base_stats.append(base_stat)
+
+                # 특수효과 저장
+                for effect in item_data['special_effects']:
+                    special_effect = BraceletSpecialEffect(
+                        effect_type=effect['effect_type']
+                    )
+                    record.special_effects.append(special_effect)
+
+                session.add(record)
+
     def collect_prices(self):
         """각 부위별, 등급별 가격 수집"""
-        parts = {
-            "목걸이": self.necklace_presets,
-            "귀걸이": self.earring_presets,
-            "반지": self.ring_presets
-        }
+        # 악세서리
+        parts = ["목걸이", "귀걸이", "반지"]
         grades = ["고대", "유물"]
 
+        total_collected = 0
+        # for grade in grades:
+        #     for part in parts:
+        #         # 해당 부위의 모든 프리셋 생성
+        #         presets = self.preset_generator.generate_presets_acc(part)
+
+        #         for preset in presets:
+        #             try:
+        #                 # API 요청 간격 조절
+        #                 time.sleep(1.0)
+
+        #                 # 프리셋으로 검색 데이터 생성
+        #                 search_data = self.preset_generator.create_search_data_acc(
+        #                     preset, grade)
+
+        #                 # API 요청 및 응답 처리
+        #                 response = do_search(
+        #                     self.url, self.headers, search_data, error_log=False)
+        #                 processed_items = self.process_response(
+        #                     response, grade, part)
+
+        #                 if processed_items:
+        #                     self.save_items(processed_items)
+        #                     total_collected += len(processed_items)
+        #                     print(f"Collected {len(processed_items)} items for {grade} {part} "
+        #                           f"(Level: {preset['enhancement_level']}, "
+        #                           f"Quality: {preset['quality']}, "
+        #                           f"Options: {preset['options']})")
+
+        #             except Exception as e:
+        #                 print(f"Error collecting {grade} {part}: {e}")
+        #                 continue
+
+        # 팔찌
         for grade in grades:
-            for part, presets in parts.items():
-                for preset in presets:
-                    try:
-                        post_body = self.gen_search_data(grade, preset)
-                        response = do_search(self.url, self.headers, post_body)
-                        
-                        if response.status_code == 200:
-                            items = self.process_response(response, grade, part)
-                            if items:
-                                self.save_items(items)
-                                print(f"Collected {len(items)} items for {grade} {part} with preset {preset}")
-                    except Exception as e:
-                        print(f"Error collecting {grade} {part} with preset {preset}: {e}")
+            presets = self.preset_generator.generate_presets_bracelet(grade)
+
+            for preset in presets:
+                try:
+                    # API 요청 간격 조절
+                    time.sleep(1.0)
+
+                    # 프리셋으로 검색 데이터 생성
+                    search_data = self.preset_generator.create_search_data_bracelet(
+                        preset, grade)
+
+                    # API 요청 및 응답 처리
+                    response = do_search(
+                        self.url, self.headers, search_data, error_log=False)
+                    processed_items = self.process_bracelet_response(
+                        response, grade)
+
+                    if processed_items:
+                        self.save_bracelet_items(processed_items)
+                        total_collected += len(processed_items)
+                        print(
+                            f"Collected {len(processed_items)} bracelet items for {grade}, {preset}")
+
+                except Exception as e:
+                    print(f"Error collecting {grade} bracelet: {e}")
+                    continue
+
+        print(f"Total collected items: {total_collected}")
 
     def run(self):
-        """스레드 실행 메서드"""
+        """메인 스레드 실행"""
         while True:
             try:
                 print(f"Starting price collection at {datetime.now()}")
@@ -188,24 +319,376 @@ class PriceCollector(threading.Thread):
                 print(f"Completed price collection at {datetime.now()}")
             except Exception as e:
                 print(f"Error in price collection: {e}")
-            
+
             time.sleep(self.interval)
 
-    # 프리셋 정의들은 원래 코드에서 가져옴
-    necklace_presets = [
-        [3, ("추피", 3), ("적주피", 3)],
-        [3, ("추피", 2), ("적주피", 3)],
-        # ... 나머지 프리셋
-    ]
 
-    earring_presets = [
-        [3, ("공퍼", 3), ("무공퍼", 3)],
-        [3, ("공퍼", 2), ("무공퍼", 3)],
-        # ... 나머지 프리셋
-    ]
+class SearchPresetGenerator:
+    def __init__(self):
+        self.qualities = [60, 70, 80, 90]
+        self.enhancement_levels = [0, 1, 2, 3]
 
-    ring_presets = [
-        [3, ("치적", 3), ("치피", 3)],
-        [3, ("치적", 2), ("치피", 3)],
-        # ... 나머지 프리셋
-    ]
+        # 특수 옵션만 정의 (부가 옵션 제거)
+        self.special_options = {
+            "목걸이": [
+                [],  # 특수 옵션 없는 경우
+                # 딜러용
+                # 특수 옵션 1개
+                [("추피", 1)], [("적주피", 1)],
+                [("추피", 2)], [("적주피", 2)],
+                [("추피", 3)], [("적주피", 3)],
+                # 특수 옵션 2개 - 모든 가능한 조합
+                [("추피", 1), ("적주피", 1)],
+                [("추피", 1), ("적주피", 2)],
+                [("추피", 1), ("적주피", 3)],
+                [("추피", 2), ("적주피", 1)],
+                [("추피", 2), ("적주피", 2)],
+                [("추피", 2), ("적주피", 3)],
+                [("추피", 3), ("적주피", 1)],
+                [("추피", 3), ("적주피", 2)],
+                [("추피", 3), ("적주피", 3)],
+                # 서폿용
+                [("아덴게이지", 1)], [("낙인력", 1)],
+                [("아덴게이지", 2)], [("낙인력", 2)],
+                [("아덴게이지", 3)], [("낙인력", 3)],
+                [("아덴게이지", 1), ("낙인력", 1)],
+                [("아덴게이지", 1), ("낙인력", 2)],
+                [("아덴게이지", 1), ("낙인력", 3)],
+                [("아덴게이지", 2), ("낙인력", 1)],
+                [("아덴게이지", 2), ("낙인력", 2)],
+                [("아덴게이지", 2), ("낙인력", 3)],
+                [("아덴게이지", 3), ("낙인력", 1)],
+                [("아덴게이지", 3), ("낙인력", 2)],
+                [("아덴게이지", 3), ("낙인력", 3)],
+            ],
+            "귀걸이": [
+                [],
+                [("공퍼", 1)], [("무공퍼", 1)],
+                [("공퍼", 2)], [("무공퍼", 2)],
+                [("공퍼", 3)], [("무공퍼", 3)],
+                [("공퍼", 1), ("무공퍼", 1)],
+                [("공퍼", 1), ("무공퍼", 2)],
+                [("공퍼", 1), ("무공퍼", 3)],
+                [("공퍼", 2), ("무공퍼", 1)],
+                [("공퍼", 2), ("무공퍼", 2)],
+                [("공퍼", 2), ("무공퍼", 3)],
+                [("공퍼", 3), ("무공퍼", 1)],
+                [("공퍼", 3), ("무공퍼", 2)],
+                [("공퍼", 3), ("무공퍼", 3)],
+            ],
+            "반지": [
+                [],
+                # 딜러용
+                [("치적", 1)], [("치피", 1)],
+                [("치적", 2)], [("치피", 2)],
+                [("치적", 3)], [("치피", 3)],
+                [("치적", 1), ("치피", 1)],
+                [("치적", 1), ("치피", 2)],
+                [("치적", 1), ("치피", 3)],
+                [("치적", 2), ("치피", 1)],
+                [("치적", 2), ("치피", 2)],
+                [("치적", 2), ("치피", 3)],
+                [("치적", 3), ("치피", 1)],
+                [("치적", 3), ("치피", 2)],
+                [("치적", 3), ("치피", 3)],
+
+                # 서폿용
+                [("아공강", 1)], [("아피강", 1)],
+                [("아공강", 2)], [("아피강", 2)],
+                [("아공강", 3)], [("아피강", 3)],
+                [("아공강", 1), ("아피강", 1)],
+                [("아공강", 1), ("아피강", 2)],
+                [("아공강", 1), ("아피강", 3)],
+                [("아공강", 2), ("아피강", 1)],
+                [("아공강", 2), ("아피강", 2)],
+                [("아공강", 2), ("아피강", 3)],
+                [("아공강", 3), ("아피강", 1)],
+                [("아공강", 3), ("아피강", 2)],
+                [("아공강", 3), ("아피강", 3)],
+            ]
+        }
+
+        # 부가 옵션도 수정
+        self.sub_options = {
+            "목걸이": {
+                "깡공": [1, 2, 3],
+                "깡무공": [1, 2, 3],
+                "최생": [1, 2, 3],          # 서폿용 부가 옵션 추가
+                "최마": [1, 2, 3],          # 서폿용 부가 옵션 추가
+            },
+            "귀걸이": {
+                "깡공": [1, 2, 3],
+                "깡무공": [1, 2, 3],
+                "아군회복": [1, 2, 3],      # 서폿용 부가 옵션 추가
+                "아군보호막": [1, 2, 3],    # 서폿용 부가 옵션 추가
+                "최생": [1, 2, 3],          # 서폿용 부가 옵션 추가
+                "최마": [1, 2, 3],          # 서폿용 부가 옵션 추가
+            },
+            "반지": {
+                "깡공": [1, 2, 3],
+                "깡무공": [1, 2, 3],
+                "최생": [1, 2, 3],          # 서폿용 부가 옵션 추가
+                "최마": [1, 2, 3],          # 서폿용 부가 옵션 추가
+            }
+        }
+
+    def generate_valid_option_combinations(self, part: str, enhancement_level: int) -> List[List[tuple]]:
+        """연마 단계에 맞는 유효한 옵션 조합 생성"""
+        if enhancement_level == 0:
+            return [[]]  # 연마 0단계면 옵션 없음
+
+        result = []
+
+        # 특수 옵션 세트에서 연마 단계에 맞는 것만 선택
+        for special_set in self.special_options[part]:
+            if len(special_set) <= enhancement_level:
+                result.append(special_set)
+
+        return result
+
+    def generate_presets_acc(self, part: str) -> List[Dict]:
+        """전체 프리셋 생성"""
+        presets = []
+
+        # 각 연마 단계, 품질에 대해
+        for level, quality in product(
+            self.enhancement_levels,
+            self.qualities
+        ):
+            # 해당 연마 단계에 맞는 옵션 조합 생성
+            valid_options = self.generate_valid_option_combinations(
+                part, level)
+
+            # 각 옵션 조합에 대한 프리셋 생성
+            for options in valid_options:
+                preset = {
+                    'enhancement_level': level,
+                    'quality': quality,
+                    'options': options
+                }
+                presets.append(preset)
+
+        return presets
+
+    def generate_presets_bracelet(self, grade: str) -> List[Dict]:
+        """전체 프리셋 생성"""
+        presets = []
+
+        # 등급별 보너스 설정
+        slot_bonus = 1 if grade == "고대" else 0        # 부여 하나 추가
+        combat_stat_bonus = 20 if grade == "고대" else 0    # 특성 20 증가
+        base_stat_bonus = 3200 if grade == "고대" else 0     # 주스탯 증가
+
+        # 기본 수치 설정
+        combat_stat_values = [40, 50, 60, 70, 80, 90]
+        base_stat_values = [6400, 8000, 9600, 11200]
+        combat_stats = ["특화", "치명", "신속"]
+        base_stats = ["힘", "민첩", "지능"]
+
+        # 고정 효과 2개인 경우
+        for fixed_slots in [2]:
+            base_options = [
+                ("팔찌 옵션 수량", "고정 효과 수량", fixed_slots),
+            ]
+
+            # 전투특성 2개 조합 생성
+            for stat_combo in combinations(combat_stats, 2):
+                for combat_stat_combo in product(combat_stat_values, repeat=2):
+                    for extra_slots in [1, 2]:  # 부여 효과 수량 1개 또는 2개
+                        options = base_options + [
+                            ("팔찌 옵션 수량", "부여 효과 수량", extra_slots + slot_bonus),
+                            ("전투 특성", stat_combo[0],
+                             combat_stat_combo[0] + combat_stat_bonus),
+                            ("전투 특성", stat_combo[1],
+                             combat_stat_combo[1] + combat_stat_bonus)
+                        ]
+                        presets.append({'options': options})
+
+            # 전투특성 1개 + 기본스탯 조합 생성
+            for combat_stat in combat_stats:
+                for combat_stat_value in combat_stat_values:
+                    for base_stat in base_stats:
+                        for base_stat_value in base_stat_values:
+                            for extra_slots in [1, 2]:  # 부여 효과 수량 1개 또는 2개
+                                options = base_options + [
+                                    ("팔찌 옵션 수량", "부여 효과 수량",
+                                     extra_slots + slot_bonus),
+                                    ("전투 특성", combat_stat,
+                                     combat_stat_value + combat_stat_bonus),
+                                    ("팔찌 기본 효과", base_stat,
+                                     base_stat_value + base_stat_bonus)
+                                ]
+                                presets.append({'options': options})
+
+            # 전투특성 1개 + 공이속 조합 생성
+            for combat_stat in combat_stats:
+                for combat_stat_value in combat_stat_values:
+                    for extra_slots in [1, 2]:  # 부여 효과 수량 1개 또는 2개
+                        options = base_options + [
+                            ("팔찌 옵션 수량", "부여 효과 수량", extra_slots + slot_bonus),
+                            ("전투 특성", combat_stat,
+                             combat_stat_value + combat_stat_bonus),
+                            ("팔찌 특수 효과", "공격 및 이동 속도 증가", 0)
+                        ]
+                        presets.append({'options': options})
+
+            # 전투특성 1개 + 잡 조합 생성
+            for combat_stat in combat_stats:
+                for combat_stat_value in combat_stat_values:
+                    options = base_options + [
+                        ("팔찌 옵션 수량", "부여 효과 수량", 2 + slot_bonus),
+                        ("전투 특성", combat_stat, combat_stat_value + combat_stat_bonus),
+                    ]
+                    presets.append({'options': options})
+
+        # 고정 효과 1개인 경우 (전투특성 1개만)
+        base_options = [
+            ("팔찌 옵션 수량", "고정 효과 수량", 1),
+        ]
+
+        for combat_stat in combat_stats:
+            for combat_stat_value in combat_stat_values:
+                options = base_options + [
+                    ("팔찌 옵션 수량", "부여 효과 수량", 2 + slot_bonus),
+                    ("전투 특성", combat_stat, combat_stat_value + combat_stat_bonus),
+                ]
+                presets.append({'options': options})
+
+        return presets
+
+    def create_search_data_acc(self, preset: Dict, grade: str, page_no: int = 1) -> Dict:
+        """생성된 프리셋으로 검색 데이터 생성"""
+        level = preset['enhancement_level']
+        quality = preset['quality']
+        options = preset['options']
+
+        # 연마 단계에 따른 enpoints 계산
+        is_necklace = any(opt[0] in necklace_only_list for opt in options)
+        if is_necklace:
+            enpoints = 4 + level_enpoint[grade][level]
+        else:
+            enpoints = 3 + level_enpoint[grade][level]
+
+        data = {
+            "ItemLevelMin": 0,
+            "ItemLevelMax": 1800,
+            "ItemGradeQuality": quality,
+            "SkillOptions": [
+                {
+                    "FirstOption": None,
+                    "SecondOption": None,
+                    "MinValue": None,
+                    "MaxValue": None
+                }
+            ],
+            "EtcOptions": [
+                {
+                    "FirstOption": 8,
+                    "SecondOption": 1,
+                    "MinValue": enpoints,
+                    "MaxValue": enpoints
+                },
+            ],
+            "Sort": "BUY_PRICE",
+            # 200010 목걸이, 20 귀걸이, 30 반지, 40 팔찌, 200000 장신구
+            "CategoryCode": 200000,
+            "CharacterClass": "",
+            "ItemTier": 4,
+            "ItemGrade": grade,
+            "PageNo": page_no,
+            "SortCondition": "ASC"
+        }
+
+        # 옵션 추가
+        for opt_name, opt_level in options:
+            data["EtcOptions"].append({
+                "FirstOption": 7,
+                "SecondOption": option_dict[opt_name],
+                "MinValue": opt_level,
+                "MaxValue": opt_level,
+            })
+
+        return data
+
+    def create_search_data_bracelet(self, preset: Dict, grade: str, page_no: int = 1) -> Dict:
+        """생성된 프리셋으로 검색 데이터 생성"""
+        options = preset['options']
+
+        data = {
+            "ItemLevelMin": 0,
+            "ItemLevelMax": 1800,
+            "ItemGradeQuality": None,
+            "SkillOptions": [
+                {
+                    "FirstOption": None,
+                    "SecondOption": None,
+                    "MinValue": None,
+                    "MaxValue": None
+                }
+            ],
+            "EtcOptions": [
+                # { 왜인지 모르겠는데 이거 들어가면 검색이 안됨
+                #     "FirstOption": 8,
+                #     "SecondOption": 2,
+                #     "MinValue": 18 if grade == "고대" else 9,
+                #     "MaxValue": 18 if grade == "고대" else 9
+                # },
+            ],
+            "Sort": "BUY_PRICE",
+            # 200010 목걸이, 20 귀걸이, 30 반지, 40 팔찌, 200000 장신구
+            "CategoryCode": 200040,
+            "CharacterClass": "",
+            "ItemTier": 4,
+            "ItemGrade": grade,
+            "PageNo": page_no,
+            "SortCondition": "ASC"
+        }
+
+        # 옵션 추가
+        for opt_first_name, opt_second_name, opt_value in options:
+            data["EtcOptions"].append({
+                "FirstOption": option_dict_bracelet_first[opt_first_name],
+                "SecondOption": option_dict_bracelet_second[opt_second_name],
+                "MinValue": opt_value,
+                "MaxValue": None,
+            })
+
+        return data
+
+
+def example_usage():
+    generator = SearchPresetGenerator()
+
+    # 목걸이 프리셋 생성 예시
+    necklace_presets = generator.generate_presets_acc("목걸이")
+    print(f"Total number of necklace presets: {len(necklace_presets)}")
+
+    # 각 연마 단계별 프리셋 수 출력
+    for level in [0, 1, 2, 3]:
+        level_presets = [
+            p for p in necklace_presets if p['enhancement_level'] == level]
+        print(f"\nLevel {level} presets: {len(level_presets)}")
+        if level < 4:  # 0, 1연마의 경우 모든 프리셋 출력
+            print("Presets:")
+            for p in level_presets:
+                print(f"  {p}")
+
+    return necklace_presets
+
+
+def example_usage_bracelet():
+    generator = SearchPresetGenerator()
+
+    # 목걸이 프리셋 생성 예시
+    presets = generator.generate_presets_bracelet("유물")
+    print(f"Total number of necklace presets: {len(presets)}")
+
+    for p in presets:
+        print(p)
+
+    return presets
+
+
+if __name__ == "__main__":
+    # example_usage()
+    example_usage_bracelet()

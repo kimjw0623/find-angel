@@ -1,17 +1,18 @@
 import os
-from datetime import datetime, timedelta
-from dotenv import load_dotenv
 import math
 import requests
 import json
 import time
+import numpy as np
+import matplotlib.pyplot as plt
 from utils import *
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-import numpy as np
 from scipy import interpolate
 from sklearn.isotonic import IsotonicRegression
-import matplotlib.pyplot as plt
+from datetime import datetime, timedelta
+from dotenv import load_dotenv
+from database import init_db, save_price_data, get_recent_prices
 
 # start_time = time.perf_counter()
 # end_time = time.perf_counter()
@@ -64,6 +65,8 @@ def gen_search_data(grade, preset, pageNo=1):
       "ItemLevelMin": 0,
       "ItemLevelMax": 1800,
       "ItemGradeQuality": 60,
+      # "ItemUpgradeLevel": null,
+      # "ItemTradeAllowCount": null,
       "SkillOptions": [
           {
               "FirstOption": None,

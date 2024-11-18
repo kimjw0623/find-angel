@@ -13,6 +13,7 @@ class PriceRecord(Base):
     
     id = Column(Integer, primary_key=True)
     timestamp = Column(DateTime, nullable=False, index=True)
+    search_cycle_id = Column(String, nullable=False, index=True)  # 새로 추가
     grade = Column(String, nullable=False, index=True)  # 고대/유물
     name = Column(String, nullable=False)
     part = Column(String, nullable=False, index=True)   # 목걸이/귀걸이/반지
@@ -62,6 +63,7 @@ class BraceletPriceRecord(Base):
     
     id = Column(Integer, primary_key=True)
     timestamp = Column(DateTime, nullable=False, index=True)
+    search_cycle_id = Column(String, nullable=False, index=True)  # 새로 추가
     grade = Column(String, nullable=False, index=True)  # 고대/유물
     name = Column(String, nullable=False)
     trade_count = Column(Integer, nullable=False)
@@ -111,12 +113,16 @@ class BraceletSpecialEffect(Base):
     
     id = Column(Integer, primary_key=True)
     bracelet_id = Column(Integer, ForeignKey('bracelet_price_records.id'), index=True)
-    effect_type = Column(String, nullable=False)  # 공이속 등
+    effect_type = Column(String, nullable=False)
+    value = Column(Float, nullable=True)
     
     bracelet = relationship("BraceletPriceRecord", back_populates="special_effects")
 
     __table_args__ = (
-        Index('idx_special_effect_search', 'bracelet_id', 'effect_type'),
+        # 특정 팔찌의 특수 효과를 효과 타입별로 빠르게 조회
+        Index('idx_bracelet_effect', 'bracelet_id', 'effect_type'),
+        # 특정 효과와 값으로 검색할 때 사용
+        Index('idx_effect_value', 'effect_type', 'value'),
     )
 
 class DatabaseManager:

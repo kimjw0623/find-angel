@@ -4,7 +4,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from database import init_database
 from price_collector import PriceCollector
-from item_checker import ItemChecker
+from item_checker import MarketScanner
 from playsound import playsound
 
 class LostArkMarketMonitor:
@@ -15,16 +15,16 @@ class LostArkMarketMonitor:
         # 데이터베이스 초기화
         self.db_manager = init_database()
         
-        # 가격 수집기 초기화 (2시간 간격)
+        # 가격 수집기 초기화 (30분 간격)
         self.price_collector = PriceCollector(
             db_manager=self.db_manager,
-            interval=7200
+            interval=1800
         )
         
         # 아이템 체커 초기화
-        self.item_checker = ItemChecker(
-            db_manager=self.db_manager
-        )
+        # self.market_scanner = MarketScanner(
+        #     db_manager=self.db_manager
+        # )
         
         # 알림음 파일 경로
         self.alert_sound_path = 'level-up-2-199574.mp3'
@@ -49,7 +49,7 @@ class LostArkMarketMonitor:
             while True:
                 try:
                     # # 새로운 매물 체크
-                    # found_notable_items = self.item_checker.check_new_items()
+                    # found_notable_items = self.market_scanner.check_new_items()
                     
                     # # 주목할 만한 매물이 있으면 알림음 재생
                     # if found_notable_items:

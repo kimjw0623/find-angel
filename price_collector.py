@@ -1,7 +1,7 @@
 import threading
 import time
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from database import *
 from utils import *
 from itertools import combinations, product
@@ -14,6 +14,7 @@ class PriceCollector(threading.Thread):
         self.daemon = True
         self.db = db_manager
         self.interval = interval
+        self.current_cycle_id = None  # 추가
         self.url = "https://developer-lostark.game.onstove.com/auctions/items"
         self.headers = {
             'accept': 'application/json',
@@ -138,8 +139,10 @@ class PriceCollector(threading.Thread):
                 option_name = option["OptionName"]
                 value = option["Value"]
 
-                # 고정 효과 수량은 전체 옵션 개수에서 도약/깨달음 2개를 뺀 값
+                # 고정 효과 수량은 전체 옵션 개수에서 도약 값과 부여 효과 수량, 즉 2를 뺀 값
                 processed_item['fixed_option_count'] = len(item["Options"]) - 2
+                if option_type == "ARK_PASSIVE":    # 도약 포인트는 필요 없음
+                    continue
                 # 부여 효과 수량 체크
                 if option_type == "BRACELET_RANDOM_SLOT":
                     processed_item['extra_option_count'] = value
@@ -155,22 +158,60 @@ class PriceCollector(threading.Thread):
                         'stat_type': option_name,
                         'value': value
                     })
-                # 특수효과 처리
-                elif option_type == "BRACELET_SPECIAL_EFFECTS":
+                # 특수효과 처리(제인숙, 체력 등등 그 외 모든 건 다 여기에 들어감)
+                else:
                     processed_item['special_effects'].append({
-                        'effect_type': option_name
+                        'effect_type': option_name,
+                        'value': value
                     })
 
             processed_items.append(processed_item)
 
         return processed_items
 
-    def save_items(self, items):
+    def save_items(self, items, search_cycle_id):
         """처리된 아이템 데이터를 DB에 저장"""
         with self.db.get_write_session() as session:
             for item_data in items:
+                # 1차 필터링: 기본 정보로 후보 아이템 조회
+                candidate_items = session.query(PriceRecord).filter(
+                    PriceRecord.grade == item_data['grade'],
+                    PriceRecord.name == item_data['name'],
+                    PriceRecord.part == item_data['part'],
+                    PriceRecord.level == item_data['level'],
+                    PriceRecord.quality == item_data['quality'],
+                    PriceRecord.price == item_data['price'],
+                    PriceRecord.search_cycle_id == search_cycle_id
+                ).all()
+
+                # 2차 필터링: 옵션 세부 비교
+                is_duplicate = False
+                for existing_item in candidate_items:
+                    session.refresh(existing_item)  # 관계 데이터 리프레시
+
+                    # 가공된 옵션 비교 (ItemOption)
+                    existing_options = {(opt.option_name, opt.option_grade) 
+                                    for opt in existing_item.options}
+                    new_options = set(item_data['options'])
+
+                    # 원본 옵션 비교 (RawItemOption)
+                    existing_raw_options = {(opt.option_name, opt.option_value, opt.is_percentage) 
+                                        for opt in existing_item.raw_options}
+                    new_raw_options = {(opt['option_name'], opt['option_value'], opt['is_percentage']) 
+                                    for opt in item_data['raw_options']}
+
+                    # 모든 옵션이 일치하는지 확인
+                    if (existing_options == new_options and
+                        existing_raw_options == new_raw_options):
+                        is_duplicate = True
+                        break
+
+                if is_duplicate:
+                    continue
+
                 record = PriceRecord(
                     timestamp=item_data['timestamp'],
+                    search_cycle_id=search_cycle_id,  # 추가
                     grade=item_data['grade'],
                     name=item_data['name'],
                     part=item_data['part'],
@@ -178,7 +219,8 @@ class PriceCollector(threading.Thread):
                     quality=item_data['quality'],
                     trade_count=item_data['trade_count'],
                     price=item_data['price'],
-                    end_time=item_data['end_time']
+                    end_time=item_data['end_time'],
+                    damage_increment=item_data.get('damage_increment')
                 )
 
                 # 옵션 저장
@@ -200,12 +242,56 @@ class PriceCollector(threading.Thread):
 
                 session.add(record)
 
-    def save_bracelet_items(self, items):
+    def save_bracelet_items(self, items, search_cycle_id):
         """처리된 팔찌 데이터를 DB에 저장"""
         with self.db.get_write_session() as session:
             for item_data in items:
+                # 1차 필터링: 기본 정보로 후보 아이템 조회
+                candidate_items = session.query(BraceletPriceRecord).filter(
+                    BraceletPriceRecord.grade == item_data['grade'],
+                    BraceletPriceRecord.name == item_data['name'],
+                    BraceletPriceRecord.price == item_data['price'],
+                    BraceletPriceRecord.fixed_option_count == item_data['fixed_option_count'],
+                    BraceletPriceRecord.extra_option_count == item_data['extra_option_count'],
+                    BraceletPriceRecord.search_cycle_id == search_cycle_id,
+                ).all()
+
+                # 2차 필터링: 옵션 세부 비교
+                is_duplicate = False
+                for existing_item in candidate_items:
+                    session.refresh(existing_item)  # 관계 데이터 리프레시
+
+                    # 전투특성 비교
+                    existing_combat_stats = {(stat.stat_type, stat.value) 
+                                        for stat in existing_item.combat_stats}
+                    new_combat_stats = {(stat['stat_type'], stat['value']) 
+                                    for stat in item_data['combat_stats']}
+                    
+                    # 기본스탯 비교
+                    existing_base_stats = {(stat.stat_type, stat.value) 
+                                        for stat in existing_item.base_stats}
+                    new_base_stats = {(stat['stat_type'], stat['value']) 
+                                    for stat in item_data['base_stats']}
+                    
+                    # 특수효과 비교
+                    existing_special_effects = {(effect.effect_type, effect.value) 
+                                            for effect in existing_item.special_effects}
+                    new_special_effects = {(effect['effect_type'], effect['value']) 
+                                        for effect in item_data['special_effects']}
+
+                    # 모든 옵션이 일치하는지 확인
+                    if (existing_combat_stats == new_combat_stats and
+                        existing_base_stats == new_base_stats and
+                        existing_special_effects == new_special_effects):
+                        is_duplicate = True
+                        break
+
+                if is_duplicate:
+                    continue
+
                 record = BraceletPriceRecord(
                     timestamp=item_data['timestamp'],
+                    search_cycle_id=search_cycle_id,  # 추가
                     grade=item_data['grade'],
                     name=item_data['name'],
                     trade_count=item_data['trade_count'],
@@ -231,10 +317,11 @@ class PriceCollector(threading.Thread):
                     )
                     record.base_stats.append(base_stat)
 
-                # 특수효과 저장
+                # 특수효과 저장 
                 for effect in item_data['special_effects']:
                     special_effect = BraceletSpecialEffect(
-                        effect_type=effect['effect_type']
+                        effect_type=effect['effect_type'],  # 딕셔너리의 effect_type 키
+                        value=effect['value']               # 딕셔너리의 value 키
                     )
                     record.special_effects.append(special_effect)
 
@@ -242,42 +329,45 @@ class PriceCollector(threading.Thread):
 
     def collect_prices(self):
         """각 부위별, 등급별 가격 수집"""
+        # 사이클 시작할 때 ID 생성
+        self.current_cycle_id = datetime.now().strftime("%Y%m%d_%H%M")
+        
         # 악세서리
         parts = ["목걸이", "귀걸이", "반지"]
         grades = ["고대", "유물"]
 
         total_collected = 0
-        # for grade in grades:
-        #     for part in parts:
-        #         # 해당 부위의 모든 프리셋 생성
-        #         presets = self.preset_generator.generate_presets_acc(part)
+        for grade in grades:
+            for part in parts:
+                # 해당 부위의 모든 프리셋 생성
+                presets = self.preset_generator.generate_presets_acc(part)
 
-        #         for preset in presets:
-        #             try:
-        #                 # API 요청 간격 조절
-        #                 time.sleep(1.0)
+                for preset in presets:
+                    try:
+                        # API 요청 간격 조절
+                        time.sleep(1.0)
 
-        #                 # 프리셋으로 검색 데이터 생성
-        #                 search_data = self.preset_generator.create_search_data_acc(
-        #                     preset, grade)
+                        # 프리셋으로 검색 데이터 생성
+                        search_data = self.preset_generator.create_search_data_acc(
+                            preset, grade)
 
-        #                 # API 요청 및 응답 처리
-        #                 response = do_search(
-        #                     self.url, self.headers, search_data, error_log=False)
-        #                 processed_items = self.process_response(
-        #                     response, grade, part)
+                        # API 요청 및 응답 처리
+                        response = do_search(
+                            self.url, self.headers, search_data, error_log=False)
+                        processed_items = self.process_response(
+                            response, grade, part)
 
-        #                 if processed_items:
-        #                     self.save_items(processed_items)
-        #                     total_collected += len(processed_items)
-        #                     print(f"Collected {len(processed_items)} items for {grade} {part} "
-        #                           f"(Level: {preset['enhancement_level']}, "
-        #                           f"Quality: {preset['quality']}, "
-        #                           f"Options: {preset['options']})")
+                        if processed_items:
+                            self.save_items(processed_items, self.current_cycle_id)
+                            total_collected += len(processed_items)
+                            print(f"Collected {len(processed_items)} items for {grade} {part} "
+                                  f"(Level: {preset['enhancement_level']}, "
+                                  f"Quality: {preset['quality']}, "
+                                  f"Options: {preset['options']})")
 
-        #             except Exception as e:
-        #                 print(f"Error collecting {grade} {part}: {e}")
-        #                 continue
+                    except Exception as e:
+                        print(f"Error collecting {grade} {part}: {e}")
+                        continue
 
         # 팔찌
         for grade in grades:
@@ -299,7 +389,7 @@ class PriceCollector(threading.Thread):
                         response, grade)
 
                     if processed_items:
-                        self.save_bracelet_items(processed_items)
+                        self.save_bracelet_items(processed_items, self.current_cycle_id)
                         total_collected += len(processed_items)
                         print(
                             f"Collected {len(processed_items)} bracelet items for {grade}, {preset}")
@@ -668,7 +758,7 @@ def example_usage():
         level_presets = [
             p for p in necklace_presets if p['enhancement_level'] == level]
         print(f"\nLevel {level} presets: {len(level_presets)}")
-        if level < 4:  # 0, 1연마의 경우 모든 프리셋 출력
+        if level < 4:  # 모든 프리셋 출력
             print("Presets:")
             for p in level_presets:
                 print(f"  {p}")

@@ -1,6 +1,7 @@
 import threading
 import time
 import os
+from dotenv import load_dotenv
 from datetime import datetime, timedelta
 from database import *
 from utils import *
@@ -25,7 +26,7 @@ class PriceCollector(threading.Thread):
         # 프리셋 생성기 초기화
         self.preset_generator = SearchPresetGenerator()
 
-    def process_response(self, response, grade, part):
+    def process_acc_response(self, response, grade, part):
         """API 응답 처리 및 DB 저장"""
         data = response.json()
         if not data["Items"]:
@@ -39,18 +40,10 @@ class PriceCollector(threading.Thread):
         if not valid_items:
             return None
 
-        # 최저가 기준 필터링
-        min_price = min(item["AuctionInfo"]["BuyPrice"]
-                        for item in valid_items)
-        price_threshold = min_price * 1.5
-
         processed_items = []
         current_time = datetime.now()
 
         for item in valid_items:
-            if item["AuctionInfo"]["BuyPrice"] > price_threshold:
-                continue
-
             processed_item = {
                 'timestamp': current_time,
                 'grade': grade,
@@ -103,18 +96,10 @@ class PriceCollector(threading.Thread):
         if not valid_items:
             return None
 
-        # 최저가 기준 필터링
-        min_price = min(item["AuctionInfo"]["BuyPrice"]
-                        for item in valid_items)
-        price_threshold = min_price * 1.5
-
         processed_items = []
         current_time = datetime.now()
 
         for item in valid_items:
-            if item["AuctionInfo"]["BuyPrice"] > price_threshold:
-                continue
-
             # 기본 정보 처리
             processed_item = {
                 'timestamp': current_time,
@@ -169,7 +154,7 @@ class PriceCollector(threading.Thread):
 
         return processed_items
 
-    def save_items(self, items, search_cycle_id):
+    def save_acc_items(self, items, search_cycle_id):
         """처리된 아이템 데이터를 DB에 저장"""
         with self.db.get_write_session() as session:
             for item_data in items:
@@ -189,20 +174,12 @@ class PriceCollector(threading.Thread):
                 for existing_item in candidate_items:
                     session.refresh(existing_item)  # 관계 데이터 리프레시
 
-                    # 가공된 옵션 비교 (ItemOption)
-                    existing_options = {(opt.option_name, opt.option_grade) 
-                                    for opt in existing_item.options}
-                    new_options = set(item_data['options'])
-
-                    # 원본 옵션 비교 (RawItemOption)
-                    existing_raw_options = {(opt.option_name, opt.option_value, opt.is_percentage) 
-                                        for opt in existing_item.raw_options}
-                    new_raw_options = {(opt['option_name'], opt['option_value'], opt['is_percentage']) 
-                                    for opt in item_data['raw_options']}
+                    # 1. 명시적으로 같은 형식으로 만든 후 비교
+                    existing_options = {(opt.option_name, opt.option_grade) for opt in existing_item.options}
+                    new_options = {(opt[0], opt[1]) for opt in item_data['options']}  # 형식 명확히 지정
 
                     # 모든 옵션이 일치하는지 확인
-                    if (existing_options == new_options and
-                        existing_raw_options == new_raw_options):
+                    if existing_options == new_options:
                         is_duplicate = True
                         break
 
@@ -354,11 +331,11 @@ class PriceCollector(threading.Thread):
                         # API 요청 및 응답 처리
                         response = do_search(
                             self.url, self.headers, search_data, error_log=False)
-                        processed_items = self.process_response(
+                        processed_items = self.process_acc_response(
                             response, grade, part)
 
                         if processed_items:
-                            self.save_items(processed_items, self.current_cycle_id)
+                            self.save_acc_items(processed_items, self.current_cycle_id)
                             total_collected += len(processed_items)
                             print(f"Collected {len(processed_items)} items for {grade} {part} "
                                   f"(Level: {preset['enhancement_level']}, "
@@ -498,29 +475,29 @@ class SearchPresetGenerator:
             ]
         }
 
-        # 부가 옵션도 수정
-        self.sub_options = {
-            "목걸이": {
-                "깡공": [1, 2, 3],
-                "깡무공": [1, 2, 3],
-                "최생": [1, 2, 3],          # 서폿용 부가 옵션 추가
-                "최마": [1, 2, 3],          # 서폿용 부가 옵션 추가
-            },
-            "귀걸이": {
-                "깡공": [1, 2, 3],
-                "깡무공": [1, 2, 3],
-                "아군회복": [1, 2, 3],      # 서폿용 부가 옵션 추가
-                "아군보호막": [1, 2, 3],    # 서폿용 부가 옵션 추가
-                "최생": [1, 2, 3],          # 서폿용 부가 옵션 추가
-                "최마": [1, 2, 3],          # 서폿용 부가 옵션 추가
-            },
-            "반지": {
-                "깡공": [1, 2, 3],
-                "깡무공": [1, 2, 3],
-                "최생": [1, 2, 3],          # 서폿용 부가 옵션 추가
-                "최마": [1, 2, 3],          # 서폿용 부가 옵션 추가
-            }
-        }
+        # # 부가 옵션도 수정
+        # self.sub_options = {
+        #     "목걸이": {
+        #         "깡공": [1, 2, 3],
+        #         "깡무공": [1, 2, 3],
+        #         "최생": [1, 2, 3],          # 서폿용 부가 옵션 추가
+        #         "최마": [1, 2, 3],          # 서폿용 부가 옵션 추가
+        #     },
+        #     "귀걸이": {
+        #         "깡공": [1, 2, 3],
+        #         "깡무공": [1, 2, 3],
+        #         "아군회복": [1, 2, 3],      # 서폿용 부가 옵션 추가
+        #         "아군보호막": [1, 2, 3],    # 서폿용 부가 옵션 추가
+        #         "최생": [1, 2, 3],          # 서폿용 부가 옵션 추가
+        #         "최마": [1, 2, 3],          # 서폿용 부가 옵션 추가
+        #     },
+        #     "반지": {
+        #         "깡공": [1, 2, 3],
+        #         "깡무공": [1, 2, 3],
+        #         "최생": [1, 2, 3],          # 서폿용 부가 옵션 추가
+        #         "최마": [1, 2, 3],          # 서폿용 부가 옵션 추가
+        #     }
+        # }
 
     def generate_valid_option_combinations(self, part: str, enhancement_level: int) -> List[List[tuple]]:
         """연마 단계에 맞는 유효한 옵션 조합 생성"""
@@ -750,7 +727,7 @@ def example_usage():
     generator = SearchPresetGenerator()
 
     # 목걸이 프리셋 생성 예시
-    necklace_presets = generator.generate_presets_acc("목걸이")
+    necklace_presets = generator.generate_presets_acc("귀걸이")
     print(f"Total number of necklace presets: {len(necklace_presets)}")
 
     # 각 연마 단계별 프리셋 수 출력
@@ -778,7 +755,21 @@ def example_usage_bracelet():
 
     return presets
 
-
 if __name__ == "__main__":
+    # example_usage() 와 example_usage_bracelet() 는 테스트용이므로 주석 처리
     # example_usage()
-    example_usage_bracelet()
+    # example_usage_bracelet()
+    
+    # 환경 변수 로드
+    load_dotenv()
+    
+    print("Starting price collector...")
+    db_manager = init_database()  # DatabaseManager() 대신 init_database() 사용
+    collector = PriceCollector(db_manager)
+    collector.start()
+    
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\nStopping price collector...")

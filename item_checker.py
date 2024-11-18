@@ -114,7 +114,6 @@ class MarketScanner:
                     
                     count += 1
                     # 즉시 평가 및 처리
-                    fix_dup_options(item)
                     evaluation = self.evaluator.evaluate_item(item)
                     if evaluation and evaluation["is_notable"]:
                         self._handle_notable_item(item, evaluation)
@@ -242,7 +241,7 @@ class MarketScanner:
                 f"품질 {evaluation['quality']} | {evaluation['level']}연마 | "
                 f"만료 {end_date} | "
                 f"{options_str} | "
-                f"거래 {item["AuctionInfo"]["TradeAllowCount"]}회")
+                f"거래 {item['AuctionInfo']['TradeAllowCount']}회")
         else:  # bracelet
             print(f"{evaluation['grade']} {item['Name']} | "
                 f"{evaluation['current_price']:,}골드 vs {evaluation['expected_price']:,}골드 "
@@ -259,13 +258,37 @@ class ItemEvaluator:
         self.price_cache = MarketPriceCache(db_manager, debug)
 
     def _get_reference_options(self, item: Dict, part: str) -> Dict[str, Any]:
-        """아이템의 옵션들을 타입별로 분류"""
+        """
+        아이템의 옵션들을 타입별로 분류
+        
+        분류 기준:
+        - dealer_exclusive: 각 부위별 딜러 전용 특수 옵션
+        * 목걸이: 추피/적주피
+        * 귀걸이: 공퍼/무공퍼
+        * 반지: 치적/치피
+        
+        - dealer_bonus: 딜러용 보너스 옵션
+        * 깡공, 깡무공
+        
+        - support_exclusive: 각 부위별 서포터 전용 특수 옵션
+        * 목걸이: 아덴게이지/낙인력
+        * 귀걸이: 무공퍼
+        * 반지: 아공강/아피강
+        
+        - support_bonus: 서포터용 보너스 옵션
+        * 최생, 최마, 아군회복, 아군보호막, 깡무공
+        
+        - base_info: 품질, 거래 가능 횟수 등 기본 정보
+        """
         reference_options = {
-            "dealer_exclusive": [],    # 딜러 전용 (추피/적주피, 공퍼/무공퍼, 치적/치피)
-            "support_exclusive": [],   # 서포터 전용 (아덴/낙인, 아공강/아피강)
-            "common": [],             # 공통 (깡공, 깡무공)
-            "quality": item["GradeQuality"],
-            "trade_count": item["AuctionInfo"]["TradeAllowCount"],
+            "dealer_exclusive": [],    
+            "dealer_bonus": [],       
+            "support_exclusive": [],   
+            "support_bonus": [],      
+            "base_info": {
+                "quality": item["GradeQuality"],
+                "trade_count": item["AuctionInfo"]["TradeAllowCount"],
+            }
         }
 
         for opt in item["Options"]:
@@ -281,40 +304,46 @@ class ItemEvaluator:
             
             # 서포터 전용 옵션
             elif ((part == "목걸이" and opt_name in ["아덴게이지", "낙인력"]) or
-                  (part == "귀걸이" and opt_name in ["무공퍼"]) or
-                  (part == "반지" and opt_name in ["아공강", "아피강"])):
+                (part == "귀걸이" and opt_name == "무공퍼") or  # 귀걸이 무공퍼 추가
+                (part == "반지" and opt_name in ["아공강", "아피강"])):
                 reference_options["support_exclusive"].append((opt_name, opt["Value"]))
             
-            # Common 옵션 (깡공, 깡무공)
+            # 딜러용 보너스 옵션
             elif opt_name in ["깡공", "깡무공"]:
-                reference_options["common"].append((opt_name, opt["Value"]))
+                reference_options["dealer_bonus"].append((opt_name, opt["Value"]))
+            
+            # 서포터용 보너스 옵션
+            elif opt_name in ["최생", "최마", "아군회복", "아군보호막", "깡무공"]:
+                reference_options["support_bonus"].append((opt_name, opt["Value"]))
 
         if self.debug:
             print("\nClassified options:")
             for key, value in reference_options.items():
-                if key not in ["quality", "trade_count"]:
+                if key != "base_info":
                     print(f"{key}: {value}")
+                else:
+                    print(f"{key}: {reference_options['base_info']}")
 
         return reference_options
     
     def _estimate_dealer_price(self, reference_options: Dict[str, Any], 
-                             price_data: Dict[str, Any]) -> Optional[int]:
-        """딜러용 가격 추정"""
-        if not price_data or not reference_options["dealer_exclusive"]:
-            return None
-
+                            price_data: Dict[str, Any]) -> int:
+        """
+        딜러용 가격 추정
+        모든 아이템은 최소한 base_price를 가지며,
+        옵션이 있는 경우 해당 옵션들의 가치를 더함
+        """
         # 기본 가격에서 시작
         estimated_price = price_data['base_price']
 
-        # Common 옵션 가치 추가
-        common_values = price_data.get('common_option_values', {})
-        for opt_name, opt_value in reference_options["common"]:
-            if opt_name in common_values and common_values[opt_name]:  # 값이 비어있지 않은지 확인
+        # Common 딜러용 보너스 옵션 가치 추가
+        for opt_name, opt_value in reference_options["dealer_bonus"]:
+            common_values = price_data.get('common_option_values', {})
+            if opt_name in common_values and common_values[opt_name]:
                 try:
                     # 가장 가까운 정해진 값 찾기
                     closest_value = min(common_values[opt_name].keys(), 
-                                    key=lambda x: abs(x - opt_value))
-                    # 해당 값의 추가 가치 적용
+                                    key=lambda x: abs(float(x) - opt_value))
                     additional_value = common_values[opt_name].get(closest_value, 0)
                     estimated_price += additional_value
                     if self.debug:
@@ -324,13 +353,13 @@ class ItemEvaluator:
                         print(f"No cached values found for {opt_name} {opt_value}")
                     continue
 
-        # 품질 보정
-        quality_diff = reference_options["quality"] - 67  # 67이 기준 품질
+        # 품질 보정 (항상 적용)
+        quality_diff = reference_options["base_info"]["quality"] - 67  # 67이 기준 품질
         quality_adjustment = quality_diff * price_data['quality_coefficient']
         estimated_price += quality_adjustment
 
-        # 거래 횟수 보정
-        trade_diff = reference_options["trade_count"] - 2  # 2회가 기준
+        # 거래 횟수 보정 (항상 적용)
+        trade_diff = reference_options["base_info"]["trade_count"] - 2  # 2회가 기준
         if trade_diff < 0:  # 거래 횟수가 적으면 가치 감소
             trade_adjustment = trade_diff * abs(price_data['trade_count_coefficient'])
             estimated_price += trade_adjustment
@@ -345,21 +374,22 @@ class ItemEvaluator:
         return max(int(estimated_price), 1)
     
     def _estimate_support_price(self, reference_options: Dict[str, Any], 
-                              price_data: Dict[str, Any]) -> Optional[int]:
-        """서포터용 가격 추정"""
-        if not price_data or not reference_options["support_exclusive"]:
-            return None
-
+                            price_data: Dict[str, Any]) -> int:
+        """
+        서포터용 가격 추정
+        모든 아이템은 최소한 base_price를 가지며,
+        옵션이 있는 경우 해당 옵션들의 가치를 더함
+        """
         # 기본 가격에서 시작
         estimated_price = price_data['base_price']
 
-        # Common 옵션 가치 추가 (서포터용 common 옵션 포함)
-        common_values = price_data.get('common_option_values', {})
-        for opt_name, opt_value in reference_options["common"]:
+        # 서포터용 보너스 옵션 가치 추가
+        for opt_name, opt_value in reference_options["support_bonus"]:
+            common_values = price_data.get('common_option_values', {})
             if opt_name in common_values and common_values[opt_name]:
                 try:
                     closest_value = min(common_values[opt_name].keys(), 
-                                    key=lambda x: abs(x - opt_value))
+                                    key=lambda x: abs(float(x) - opt_value))
                     additional_value = common_values[opt_name].get(closest_value, 0)
                     estimated_price += additional_value
                     if self.debug:
@@ -369,14 +399,13 @@ class ItemEvaluator:
                         print(f"No cached values found for {opt_name} {opt_value}")
                     continue
 
-
-        # 품질 보정
-        quality_diff = reference_options["quality"] - 67
+        # 품질 보정 (항상 적용)
+        quality_diff = reference_options["base_info"]["quality"] - 67
         quality_adjustment = quality_diff * price_data['quality_coefficient']
         estimated_price += quality_adjustment
 
-        # 거래 횟수 보정
-        trade_diff = reference_options["trade_count"] - 2
+        # 거래 횟수 보정 (항상 적용)
+        trade_diff = reference_options["base_info"]["trade_count"] - 2
         if trade_diff < 0:  # 거래 횟수가 적으면 가치 감소
             trade_adjustment = trade_diff * abs(price_data['trade_count_coefficient'])
             estimated_price += trade_adjustment
@@ -391,7 +420,6 @@ class ItemEvaluator:
         return max(int(estimated_price), 1)
 
     def _estimate_acc_price(self, item: Dict, grade: str, part: str, level: int) -> Dict[str, Any]:
-        """딜러용/서포터용 가격 모두 추정"""
         try:
             if self.debug:
                 print(f"\n=== Price Estimation Debug ===")
@@ -404,60 +432,27 @@ class ItemEvaluator:
 
             # 옵션 분류
             reference_options = self._get_reference_options(item, part)
-    
+        
             # 현재 즉구가
             current_price = item["AuctionInfo"]["BuyPrice"]
-
-            # exclusive 옵션이 전혀 없으면 dealer로 처리
-            if not reference_options["dealer_exclusive"] and not reference_options["support_exclusive"]:
-                return {
-                    "type": "dealer",
-                    "price": current_price,
-                    "dealer_price": current_price,
-                    "support_price": None,
-                    "has_dealer_options": True,
-                    "has_support_options": False
-                }
 
             # 캐시된 가격 데이터 조회
             price_data = self.price_cache.get_price_data(grade, part, level, reference_options)
 
-            # 딜러용/서포터용 가격 추정
-            dealer_price = None
-            support_price = None
+            # 딜러용/서포터용 가격 추정 - 항상 양쪽 다 계산
+            dealer_price = self._estimate_dealer_price(reference_options, price_data["dealer"])
+            support_price = self._estimate_support_price(reference_options, price_data["support"])
 
-            if price_data["dealer"]:
-                dealer_price = self._estimate_dealer_price(reference_options, price_data["dealer"])
-            
-            if price_data["support"]:
-                support_price = self._estimate_support_price(reference_options, price_data["support"])
-
-            # 가격 추정이 실패하면 현재 가격을 사용
-            if dealer_price is None and reference_options["dealer_exclusive"]:
-                dealer_price = current_price
-            if support_price is None and reference_options["support_exclusive"]:
-                support_price = current_price
-                    
+            # has_options는 여전히 실제 옵션 존재 여부로 판단
             result = {
                 "dealer_price": dealer_price,
                 "support_price": support_price,
-                "has_dealer_options": bool(reference_options["dealer_exclusive"]),
-                "has_support_options": bool(reference_options["support_exclusive"]),
+                "has_dealer_options": bool(reference_options["dealer_exclusive"] or reference_options["dealer_bonus"]),
+                "has_support_options": bool(reference_options["support_exclusive"] or reference_options["support_bonus"]),
             }
 
-            # 최종 타입과 가격 결정
-            if dealer_price and support_price:
-                if dealer_price > support_price:
-                    result.update({
-                        "type": "dealer",
-                        "price": dealer_price
-                    })
-                else:
-                    result.update({
-                        "type": "support",
-                        "price": support_price
-                    })
-            elif dealer_price:
+            # 최종 타입과 가격 결정 - 항상 둘 중 더 높은 쪽으로
+            if dealer_price > support_price:
                 result.update({
                     "type": "dealer",
                     "price": dealer_price
@@ -495,6 +490,7 @@ class ItemEvaluator:
         if "팔찌" in item["Name"]:
             return self._evaluate_bracelet(item)
         else:
+            fix_dup_options(item) # 중복 옵션 처리해서 보내기
             return self._evaluate_accessory(item)
 
     def _evaluate_accessory(self, item: Dict) -> Optional[Dict]:
@@ -648,8 +644,8 @@ class ItemEvaluator:
         return False
 
 class MarketMonitor:
-    def __init__(self, db_manager):
-        self.evaluator = ItemEvaluator(db_manager, debug=False)
+    def __init__(self, db_manager, debug=False):
+        self.evaluator = ItemEvaluator(db_manager, debug=debug)
         self.scanner = MarketScanner(db_manager, self.evaluator)
 
     def run(self):
@@ -669,7 +665,7 @@ class MarketMonitor:
 
 def main():
     db_manager = DatabaseManager()
-    monitor = MarketMonitor(db_manager)
+    monitor = MarketMonitor(db_manager, debug=False)
     monitor.run()
 
 if __name__ == "__main__":  

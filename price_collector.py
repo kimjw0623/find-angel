@@ -317,8 +317,8 @@ class PriceCollector(threading.Thread):
         # 악세서리
         parts = ["목걸이", "귀걸이", "반지"]
         grades = ["고대", "유물"]
-        ACC_MAX_PAGES = 1000  # 최대 3페이지까지만 수집
-        BRACELET_MAX_PAGES = 1000 # 최대 1페이지까지만 수집
+        ACC_MAX_PAGES = 3600  # 최대 3페이지까지만 수집
+        BRACELET_MAX_PAGES = 3600 # 최대 1페이지까지만 수집
 
         total_collected = 0
         for grade in grades:
@@ -376,6 +376,7 @@ class PriceCollector(threading.Thread):
 
             # 팔찌 (동일한 페이지네이션 로직 적용)
             presets = self.preset_generator.generate_presets_bracelet(grade)
+            print(presets)
 
             for preset in presets:
                 try:
@@ -602,74 +603,82 @@ class SearchPresetGenerator:
         combat_stats = ["특화", "치명", "신속"]
         base_stats = ["힘", "민첩", "지능"]
 
-        # 고정 효과 2개인 경우
-        for fixed_slots in [2]:
-            base_options = [
-                ("팔찌 옵션 수량", "고정 효과 수량", fixed_slots),
-            ]
+        # # 고정 효과 2개인 경우
+        # for fixed_slots in [2]: 
+        #     base_options = [
+        #         ("팔찌 옵션 수량", "고정 효과 수량", fixed_slots),
+        #     ]
 
-            # 전투특성 2개 조합 생성
-            for stat_combo in combinations(combat_stats, 2):
-                for combat_stat_combo in product(combat_stat_values, repeat=2):
-                    for extra_slots in [1, 2]:  # 부여 효과 수량 1개 또는 2개
-                        options = base_options + [
-                            ("팔찌 옵션 수량", "부여 효과 수량", extra_slots + slot_bonus),
-                            ("전투 특성", stat_combo[0],
-                             combat_stat_combo[0] + combat_stat_bonus),
-                            ("전투 특성", stat_combo[1],
-                             combat_stat_combo[1] + combat_stat_bonus)
-                        ]
-                        presets.append({'options': options})
+        #     # 전투특성 2개 조합 생성
+        #     for stat_combo in combinations(combat_stats, 2):
+        #         for combat_stat_combo in product(combat_stat_values, repeat=2):
+        #             # for extra_slots in [1, 2]:  # 부여 효과 수량 1개 또는 2개
+        #             for extra_slots in [1]:  # 부여 효과 수량 1개
+        #                 options = base_options + [
+        #                     ("팔찌 옵션 수량", "부여 효과 수량", extra_slots + slot_bonus),
+        #                     ("전투 특성", stat_combo[0],
+        #                      combat_stat_combo[0] + combat_stat_bonus),
+        #                     ("전투 특성", stat_combo[1],
+        #                      combat_stat_combo[1] + combat_stat_bonus)
+        #                 ]
+        #                 presets.append({'options': options})
 
-            # 전투특성 1개 + 기본스탯 조합 생성
-            for combat_stat in combat_stats:
-                for combat_stat_value in combat_stat_values:
-                    for base_stat in base_stats:
-                        for base_stat_value in base_stat_values:
-                            for extra_slots in [1, 2]:  # 부여 효과 수량 1개 또는 2개
-                                options = base_options + [
-                                    ("팔찌 옵션 수량", "부여 효과 수량",
-                                     extra_slots + slot_bonus),
-                                    ("전투 특성", combat_stat,
-                                     combat_stat_value + combat_stat_bonus),
-                                    ("팔찌 기본 효과", base_stat,
-                                     base_stat_value + base_stat_bonus)
-                                ]
-                                presets.append({'options': options})
+        #     # 전투특성 1개 + 기본스탯 조합 생성
+        #     for combat_stat in combat_stats:
+        #         for combat_stat_value in combat_stat_values:
+        #             for base_stat in base_stats:
+        #                 for base_stat_value in base_stat_values:
+        #                     # for extra_slots in [1, 2]:  # 부여 효과 수량 1개 또는 2개
+        #                     for extra_slots in [1]:  # 부여 효과 수량 1개
+        #                         options = base_options + [
+        #                             ("팔찌 옵션 수량", "부여 효과 수량",
+        #                              extra_slots + slot_bonus),
+        #                             ("전투 특성", combat_stat,
+        #                              combat_stat_value + combat_stat_bonus),
+        #                             ("팔찌 기본 효과", base_stat,
+        #                              base_stat_value + base_stat_bonus)
+        #                         ]
+        #                         presets.append({'options': options})
 
-            # 전투특성 1개 + 공이속 조합 생성
-            for combat_stat in combat_stats:
-                for combat_stat_value in combat_stat_values:
-                    for extra_slots in [1, 2]:  # 부여 효과 수량 1개 또는 2개
-                        options = base_options + [
-                            ("팔찌 옵션 수량", "부여 효과 수량", extra_slots + slot_bonus),
-                            ("전투 특성", combat_stat,
-                             combat_stat_value + combat_stat_bonus),
-                            ("팔찌 특수 효과", "공격 및 이동 속도 증가", 0)
-                        ]
-                        presets.append({'options': options})
+        #     # 전투특성 1개 + 공이속 조합 생성
+        #     for combat_stat in combat_stats:
+        #         for combat_stat_value in combat_stat_values:
+        #             # for extra_slots in [1, 2]:  # 부여 효과 수량 1개 또는 2개
+        #             for extra_slots in [1]:  # 부여 효과 수량 1개
+        #                 options = base_options + [
+        #                     ("팔찌 옵션 수량", "부여 효과 수량", extra_slots + slot_bonus),
+        #                     ("전투 특성", combat_stat,
+        #                      combat_stat_value + combat_stat_bonus),
+        #                     ("팔찌 특수 효과", "공격 및 이동 속도 증가", 0)
+        #                 ]
+        #                 presets.append({'options': options})
 
-            # 전투특성 1개 + 잡 조합 생성
-            for combat_stat in combat_stats:
-                for combat_stat_value in combat_stat_values:
-                    options = base_options + [
-                        ("팔찌 옵션 수량", "부여 효과 수량", 2 + slot_bonus),
-                        ("전투 특성", combat_stat, combat_stat_value + combat_stat_bonus),
-                    ]
-                    presets.append({'options': options})
+        #     # 전투특성 1개 + 잡 조합 생성
+        #     for combat_stat in combat_stats:
+        #         for combat_stat_value in combat_stat_values:
+        #             options = base_options + [
+        #                 ("팔찌 옵션 수량", "부여 효과 수량", 2 + slot_bonus),
+        #                 ("전투 특성", combat_stat, combat_stat_value + combat_stat_bonus),
+        #             ]
+        #             presets.append({'options': options})
 
         # 고정 효과 1개인 경우 (전투특성 1개만)
         base_options = [
             ("팔찌 옵션 수량", "고정 효과 수량", 1),
         ]
 
-        for combat_stat in combat_stats:
-            for combat_stat_value in combat_stat_values:
-                options = base_options + [
-                    ("팔찌 옵션 수량", "부여 효과 수량", 2 + slot_bonus),
-                    ("전투 특성", combat_stat, combat_stat_value + combat_stat_bonus),
+        # for combat_stat in combat_stats:
+        #     for combat_stat_value in combat_stat_values:
+        #         options = base_options + [
+        #             ("팔찌 옵션 수량", "부여 효과 수량", 2 + slot_bonus),
+        #             ("전투 특성", combat_stat, combat_stat_value + combat_stat_bonus),
+        #         ]
+        #         presets.append({'options': options})
+        
+        options = base_options + [
+                    ("팔찌 옵션 수량", "부여 효과 수량", 1 + slot_bonus),
                 ]
-                presets.append({'options': options})
+        presets.append({'options': options})
 
         return presets
 

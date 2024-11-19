@@ -474,3 +474,5 @@ def load_evaluate_functions():
     finally:
         _release_lock()
     return evaluate_functions
+
+SEARCH_INTERVAL = 0.61

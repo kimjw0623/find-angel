@@ -163,86 +163,90 @@ class MarketPriceCache:
         try:
             print("\nUpdating price cache...")
             start_time = datetime.now()
+            timestamp = start_time.strftime("%Y%m%d_%H%M%S")
+            log_filename = f'price_calculation_{timestamp}.log'
 
-            new_cache = {
-                "dealer": {},
-                "support": {}
-            }
+            with redirect_stdout(log_filename):
+                new_cache = {
+                    "dealer": {},
+                    "support": {}
+                }
 
-            with self.db.get_read_session() as session:
-                recent_time = datetime.now() - timedelta(hours=24)
+                with self.db.get_read_session() as session:
+                    recent_time = datetime.now() - timedelta(hours=24)
+                    
+                    # 최근 24시간 데이터 조회
+                    records = session.query(PriceRecord).filter(
+                        PriceRecord.timestamp >= recent_time
+                    ).all()
+
+                    # 딜러용/서포터용 데이터 그룹화
+                    dealer_groups = {}
+                    support_groups = {}
+
+                    for record in records:
+                        session.refresh(record)
+
+                        dealer_options = []
+                        support_options = []
+                        # 부위 확인
+                        if "목걸이" in record.name:
+                            part = "목걸이"
+                            # 딜러 옵션 체크
+                            dealer_options.extend([("추피", opt.option_value) for opt in record.raw_options if opt.option_name == "추피"])
+                            dealer_options.extend([("적주피", opt.option_value) for opt in record.raw_options if opt.option_name == "적주피"])
+                            # 서폿 옵션 체크
+                            support_options.extend([("아덴게이지", opt.option_value) for opt in record.raw_options if opt.option_name == "아덴게이지"])
+                            support_options.extend([("낙인력", opt.option_value) for opt in record.raw_options if opt.option_name == "낙인력"])
+                        elif "귀걸이" in record.name:
+                            part = "귀걸이"
+                            # 딜러 옵션 체크
+                            dealer_options.extend([("공퍼", opt.option_value) for opt in record.raw_options if opt.option_name == "공퍼"])
+                            dealer_options.extend([("무공퍼", opt.option_value) for opt in record.raw_options if opt.option_name == "무공퍼"])
+                            # 서폿 옵션 체크
+                            support_options.extend([("무공퍼", opt.option_value) for opt in record.raw_options if opt.option_name == "무공퍼"])
+                        elif "반지" in record.name:
+                            part = "반지"
+                            # 딜러 옵션 체크
+                            dealer_options.extend([("치적", opt.option_value) for opt in record.raw_options if opt.option_name == "치적"])
+                            dealer_options.extend([("치피", opt.option_value) for opt in record.raw_options if opt.option_name == "치피"])
+                            # 서폿 옵션 체크
+                            support_options.extend([("아공강", opt.option_value) for opt in record.raw_options if opt.option_name == "아공강"])
+                            support_options.extend([("아피강", opt.option_value) for opt in record.raw_options if opt.option_name == "아피강"])
+                        else:
+                            continue
+
+                        # 딜러용/서포터용 키 생성
+                        dealer_key = f"{record.grade}:{part}:{record.level}:{sorted(dealer_options)}" if dealer_options else f"{record.grade}:{part}:{record.level}:base"
+                        if dealer_key not in dealer_groups:
+                            dealer_groups[dealer_key] = []
+                        dealer_groups[dealer_key].append(record)
+
+                        support_key = f"{record.grade}:{part}:{record.level}:{sorted(support_options)}" if support_options else f"{record.grade}:{part}:{record.level}:base"
+                        if support_key not in support_groups:
+                            support_groups[support_key] = []
+                        support_groups[support_key].append(record)
+
+                    # 각 그룹별로 가격 계산
+                    for key, items in dealer_groups.items():
+                        if len(items) >= 3:  # 최소 3개 이상의 데이터가 있는 경우만
+                            price_data = self._calculate_group_prices(items, key, "dealer")
+                            if price_data:
+                                new_cache["dealer"][key] = price_data
+
+                    for key, items in support_groups.items():
+                        if len(items) >= 3:
+                            price_data = self._calculate_group_prices(items, key, "support")
+                            if price_data:
+                                new_cache["support"][key] = price_data
+                                
+                # 팔찌 가격 업데이트
+                for grade in ["고대", "유물"]:
+                    cache_key = f"bracelet_{grade}"
+                    new_cache[cache_key] = self._calculate_bracelet_prices(grade)
+
+                self.cache = new_cache
                 
-                # 최근 24시간 데이터 조회
-                records = session.query(PriceRecord).filter(
-                    PriceRecord.timestamp >= recent_time
-                ).all()
-
-                # 딜러용/서포터용 데이터 그룹화
-                dealer_groups = {}
-                support_groups = {}
-
-                for record in records:
-                    session.refresh(record)
-
-                    dealer_options = []
-                    support_options = []
-                    # 부위 확인
-                    if "목걸이" in record.name:
-                        part = "목걸이"
-                        # 딜러 옵션 체크
-                        dealer_options.extend([("추피", opt.option_value) for opt in record.raw_options if opt.option_name == "추피"])
-                        dealer_options.extend([("적주피", opt.option_value) for opt in record.raw_options if opt.option_name == "적주피"])
-                        # 서폿 옵션 체크
-                        support_options.extend([("아덴게이지", opt.option_value) for opt in record.raw_options if opt.option_name == "아덴게이지"])
-                        support_options.extend([("낙인력", opt.option_value) for opt in record.raw_options if opt.option_name == "낙인력"])
-                    elif "귀걸이" in record.name:
-                        part = "귀걸이"
-                        # 딜러 옵션 체크
-                        dealer_options.extend([("공퍼", opt.option_value) for opt in record.raw_options if opt.option_name == "공퍼"])
-                        dealer_options.extend([("무공퍼", opt.option_value) for opt in record.raw_options if opt.option_name == "무공퍼"])
-                        # 서폿 옵션 체크
-                        support_options.extend([("무공퍼", opt.option_value) for opt in record.raw_options if opt.option_name == "무공퍼"])
-                    elif "반지" in record.name:
-                        part = "반지"
-                        # 딜러 옵션 체크
-                        dealer_options.extend([("치적", opt.option_value) for opt in record.raw_options if opt.option_name == "치적"])
-                        dealer_options.extend([("치피", opt.option_value) for opt in record.raw_options if opt.option_name == "치피"])
-                        # 서폿 옵션 체크
-                        support_options.extend([("아공강", opt.option_value) for opt in record.raw_options if opt.option_name == "아공강"])
-                        support_options.extend([("아피강", opt.option_value) for opt in record.raw_options if opt.option_name == "아피강"])
-                    else:
-                        continue
-
-                    # 딜러용/서포터용 키 생성
-                    dealer_key = f"{record.grade}:{part}:{record.level}:{sorted(dealer_options)}" if dealer_options else f"{record.grade}:{part}:{record.level}:base"
-                    if dealer_key not in dealer_groups:
-                        dealer_groups[dealer_key] = []
-                    dealer_groups[dealer_key].append(record)
-
-                    support_key = f"{record.grade}:{part}:{record.level}:{sorted(support_options)}" if support_options else f"{record.grade}:{part}:{record.level}:base"
-                    if support_key not in support_groups:
-                        support_groups[support_key] = []
-                    support_groups[support_key].append(record)
-
-                # 각 그룹별로 가격 계산
-                for key, items in dealer_groups.items():
-                    if len(items) >= 3:  # 최소 3개 이상의 데이터가 있는 경우만
-                        price_data = self._calculate_group_prices(items, key, "dealer")
-                        if price_data:
-                            new_cache["dealer"][key] = price_data
-
-                for key, items in support_groups.items():
-                    if len(items) >= 3:
-                        price_data = self._calculate_group_prices(items, key, "support")
-                        if price_data:
-                            new_cache["support"][key] = price_data
-                            
-            # 팔찌 가격 업데이트
-            for grade in ["고대", "유물"]:
-                cache_key = f"bracelet_{grade}"
-                new_cache[cache_key] = self._calculate_bracelet_prices(grade)
-
-            self.cache = new_cache
             self.last_update = datetime.now()
             
             # 캐시 파일 저장
@@ -487,143 +491,136 @@ class MarketPriceCache:
         """그룹의 가격 통계 계산"""
         if not items:
             return None
+        print(f"\n=== Calculating Group Prices for {exclusive_key} ({role}) ===")
+        print(f"Total items in group: {len(items)}")
+
+        # 중복 제거
+        items = self._get_unique_items(items)
+        print(f"Total items after deduplication: {len(items)}")
         
-        # debug 모드일 때 로그 파일로 출력 리다이렉트
-        # debug_context = (redirect_stdout('price_calculation.log') if self.debug else nullcontext())
-        # 그냥, 항상 파일로 출력 리다이렉트
-        debug_context = redirect_stdout('price_calculation.log')
+        # exclusive_key에서 정보 추출
+        grade, part, level, *_ = exclusive_key.split(':')
+
+        with self.db.get_read_session() as session:
+            # 아이템들의 ID 목록
+            item_ids = [item.id for item in items]
+            
+            print("\nStarting item filtering:")
+            print(f"Initial item count: {len(item_ids)}")
+
+            query = session.query(PriceRecord).filter(
+                PriceRecord.id.in_(item_ids)
+            )
+
+            initial_count = query.count()
+            print(f"Items after initial filter: {initial_count}")
+
+            # 같은 exclusive 그룹의 다른 옵션들이 없는 아이템만 선택
+            for group_role in ["dealer", "support"]:
+                for exc_opt in self.EXCLUSIVE_OPTIONS[part][group_role]:
+                    # 현재 검색 중인 옵션은 건너뛰기
+                    if exc_opt in exclusive_key:
+                        continue
+                    # 다른 exclusive 옵션이 있는 아이템 제외
+                    subq = (session.query(ItemOption.price_record_id)
+                        .filter(ItemOption.option_name == exc_opt)
+                        .scalar_subquery())
+
+                    query = query.filter(~PriceRecord.id.in_(subq))
+
+                    count_after = query.count()
+                    print(f"Items after excluding {exc_opt}: {count_after}")
+
+            filtered_items = query.all()
+            print(f"\nItems after exclusive option filtering: {len(filtered_items)}")
+
+            role_related_options = {
+                "dealer": ["깡공", "깡무공"],
+                "support": ["깡무공", "최생", "최마", "아군회복", "아군보호막"]
+            }
+
+            # 기본 가격 계산 (common 옵션 제외)
+            base_items = [item for item in items 
+                        if not any(opt.option_name in role_related_options[role] 
+                                for opt in item.raw_options)]
         
-        with debug_context:
-            print(f"\n=== Calculating Group Prices for {exclusive_key} ({role}) ===")
-            print(f"Total items in group: {len(items)}")
-
-            # 중복 제거
-            items = self._get_unique_items(items)
-            print(f"Total items after deduplication: {len(items)}")
-            
-            # exclusive_key에서 정보 추출
-            grade, part, level, *_ = exclusive_key.split(':')
-
-            with self.db.get_read_session() as session:
-                # 아이템들의 ID 목록
-                item_ids = [item.id for item in items]
-                
-                print("\nStarting item filtering:")
-                print(f"Initial item count: {len(item_ids)}")
-
-                query = session.query(PriceRecord).filter(
-                    PriceRecord.id.in_(item_ids)
-                )
-
-                initial_count = query.count()
-                print(f"Items after initial filter: {initial_count}")
-
-                # 같은 exclusive 그룹의 다른 옵션들이 없는 아이템만 선택
-                for group_role in ["dealer", "support"]:
-                    for exc_opt in self.EXCLUSIVE_OPTIONS[part][group_role]:
-                        # 현재 검색 중인 옵션은 건너뛰기
-                        if exc_opt in exclusive_key:
-                            continue
-                        # 다른 exclusive 옵션이 있는 아이템 제외
-                        subq = (session.query(ItemOption.price_record_id)
-                            .filter(ItemOption.option_name == exc_opt)
-                            .scalar_subquery())
-
-                        query = query.filter(~PriceRecord.id.in_(subq))
-
-                        count_after = query.count()
-                        print(f"Items after excluding {exc_opt}: {count_after}")
-
-                filtered_items = query.all()
-                print(f"\nItems after exclusive option filtering: {len(filtered_items)}")
-
-                role_related_options = {
-                    "dealer": ["깡공", "깡무공"],
-                    "support": ["깡무공", "최생", "최마", "아군회복", "아군보호막"]
-                }
-
-                # 기본 가격 계산 (common 옵션 제외)
-                base_items = [item for item in items 
-                            if not any(opt.option_name in role_related_options[role] 
-                                    for opt in item.raw_options)]
-            
-                print(f"\nBase items (without common options): {len(base_items)}")
-                if base_items:
-                    print("Sample base items:")
-                    for item in base_items[:3]:
-                        print(f"- Price: {item.price:,}, Quality: {item.quality}, "
-                            f"Trade Count: {item.trade_count}")
-            
-                prices = []
-                qualities = []
-                trade_counts = []
-
-                # base_items가 있으면 그것만 사용, 없으면 전체 사용
-                target_items = base_items if base_items else filtered_items
-                if not base_items:
-                    print("\nNo pure base items found, using all items for base calculation")
-            
-                for item in target_items:
-                    prices.append(item.price)
-                    qualities.append(item.quality)
-                    trade_counts.append(item.trade_count)
-
-                # 첫 번째 단계: 두 번째로 낮은 가격을 base 가격으로 설정
-                prices = np.array(prices)
-                sorted_prices = np.sort(prices)
-            
-                print(f"\nStep 1 - Before filtering:")
-                print(f"- Initial price range: {np.min(prices):,} ~ {np.max(prices):,}")
-                print(f"- Lowest prices (sorted): {sorted_prices[:5]}")  # 가장 낮은 5개 가격 출력
-            
-                # base 가격 계산 (두 번째로 낮은 가격)
-                base_price = sorted_prices[1] if len(sorted_prices) > 1 else sorted_prices[0]
-                print(f"\nBase price calculation:")
-                print(f"- Second lowest price selected as base: {base_price:,}")
-
-                # 두 번째 단계: base 가격의 일정 배수 초과 제외
-                MAX_PRICE_MULTIPLIER = 5.0
-                mask = prices <= base_price * MAX_PRICE_MULTIPLIER
-                filtered_prices = prices[mask]
-                filtered_qualities = np.array(qualities)[mask]
-                filtered_trade_counts = np.array(trade_counts)[mask]
-
-                print(f"\nStep 2 - After removing prices > {base_price * MAX_PRICE_MULTIPLIER:,.0f} (base_price * {MAX_PRICE_MULTIPLIER}):")
-                print(f"- Final remaining samples: {len(filtered_prices)}/{len(prices)}")
-                print(f"- Final price range: {np.min(filtered_prices):,} ~ {np.max(filtered_prices):,}")
-                print(f"- Quality range: {np.min(filtered_qualities)} ~ {np.max(filtered_qualities)}")
-                print(f"- Trade count range: {np.min(filtered_trade_counts)} ~ {np.max(filtered_trade_counts)}")
+            print(f"\nBase items (without common options): {len(base_items)}")
+            if base_items:
+                print("Sample base items:")
+                for item in base_items[:3]:
+                    print(f"- Price: {item.price:,}, Quality: {item.quality}, "
+                        f"Trade Count: {item.trade_count}")
         
-                if len(filtered_prices) < 3:
-                    print("\nInsufficient samples after filtering")
-                    return None
+            prices = []
+            qualities = []
+            trade_counts = []
 
-                # 계수 계산
-                quality_coefficient = self._calculate_quality_coefficient(filtered_prices, filtered_qualities)
-                trade_coefficient = self._calculate_trade_coefficient(filtered_prices, filtered_trade_counts)
+            # base_items가 있으면 그것만 사용, 없으면 전체 사용
+            target_items = base_items if base_items else filtered_items
+            if not base_items:
+                print("\nNo pure base items found, using all items for base calculation")
+        
+            for item in target_items:
+                prices.append(item.price)
+                qualities.append(item.quality)
+                trade_counts.append(item.trade_count)
 
-                print("\nCalculated coefficients:")
-                print(f"- Quality coefficient: {quality_coefficient:,.2f}")
-                print(f"- Trade count coefficient: {trade_coefficient:,.2f}")
+            # 첫 번째 단계: 두 번째로 낮은 가격을 base 가격으로 설정
+            prices = np.array(prices)
+            sorted_prices = np.sort(prices)
+        
+            print(f"\nStep 1 - Before filtering:")
+            print(f"- Initial price range: {np.min(prices):,} ~ {np.max(prices):,}")
+            print(f"- Lowest prices (sorted): {sorted_prices[:5]}")  # 가장 낮은 5개 가격 출력
+        
+            # base 가격 계산 (두 번째로 낮은 가격)
+            base_price = sorted_prices[1] if len(sorted_prices) > 1 else sorted_prices[0]
+            print(f"\nBase price calculation:")
+            print(f"- Second lowest price selected as base: {base_price:,}")
 
-                # Common 옵션 값 계산
-                common_option_values = self._calculate_common_option_values(filtered_items, exclusive_key, role)
+            # 두 번째 단계: base 가격의 일정 배수 초과 제외
+            MAX_PRICE_MULTIPLIER = 5.0
+            mask = prices <= base_price * MAX_PRICE_MULTIPLIER
+            filtered_prices = prices[mask]
+            filtered_qualities = np.array(qualities)[mask]
+            filtered_trade_counts = np.array(trade_counts)[mask]
 
-                print("\nFinal price statistics:")
-                print(f"- Base price: {np.min(filtered_prices):,}")
-                print(f"- Standard deviation: {np.std(filtered_prices):,.2f}")
-                print(f"- Sample count: {len(filtered_prices)}")
+            print(f"\nStep 2 - After removing prices > {base_price * MAX_PRICE_MULTIPLIER:,.0f} (base_price * {MAX_PRICE_MULTIPLIER}):")
+            print(f"- Final remaining samples: {len(filtered_prices)}/{len(prices)}")
+            print(f"- Final price range: {np.min(filtered_prices):,} ~ {np.max(filtered_prices):,}")
+            print(f"- Quality range: {np.min(filtered_qualities)} ~ {np.max(filtered_qualities)}")
+            print(f"- Trade count range: {np.min(filtered_trade_counts)} ~ {np.max(filtered_trade_counts)}")
+    
+            if len(filtered_prices) < 3:
+                print("\nInsufficient samples after filtering")
+                return None
 
-                return {
-                    'base_price': np.min(filtered_prices),
-                    'price_std': np.std(filtered_prices),
-                    'quality_coefficient': max(0, quality_coefficient),  # 품질 계수는 항상 양수
-                    'trade_count_coefficient': min(0, trade_coefficient),  # 거래 횟수 계수는 항상 음수
-                    'common_option_values': common_option_values,
-                    'sample_count': len(filtered_prices),
-                    'total_sample_count': len(items),
-                    'last_update': datetime.now()
-                }
+            # 계수 계산
+            quality_coefficient = self._calculate_quality_coefficient(filtered_prices, filtered_qualities)
+            trade_coefficient = self._calculate_trade_coefficient(filtered_prices, filtered_trade_counts)
+
+            print("\nCalculated coefficients:")
+            print(f"- Quality coefficient: {quality_coefficient:,.2f}")
+            print(f"- Trade count coefficient: {trade_coefficient:,.2f}")
+
+            # Common 옵션 값 계산
+            common_option_values = self._calculate_common_option_values(filtered_items, exclusive_key, role)
+
+            print("\nFinal price statistics:")
+            print(f"- Base price: {np.min(filtered_prices):,}")
+            print(f"- Standard deviation: {np.std(filtered_prices):,.2f}")
+            print(f"- Sample count: {len(filtered_prices)}")
+
+            return {
+                'base_price': np.min(filtered_prices),
+                'price_std': np.std(filtered_prices),
+                'quality_coefficient': max(0, quality_coefficient),  # 품질 계수는 항상 양수
+                'trade_count_coefficient': min(0, trade_coefficient),  # 거래 횟수 계수는 항상 음수
+                'common_option_values': common_option_values,
+                'sample_count': len(filtered_prices),
+                'total_sample_count': len(items),
+                'last_update': datetime.now()
+            }
 
     def _calculate_quality_coefficient(self, prices, qualities) -> float:
         """품질에 따른 가격 계수 계산"""
@@ -642,100 +639,94 @@ class MarketPriceCache:
     def _calculate_bracelet_prices(self, grade: str) -> Dict:
         """팔찌 패턴별 가격 계산"""
         try:
-            # debug 모드일 때 로그 파일로 출력 리다이렉트
-            # debug_context = (redirect_stdout('price_calculation.log') if self.debug else nullcontext())
-            # 그냥, 항상 파일로 출력 리다이렉트
-            debug_context = redirect_stdout('price_calculation.log')
+            print(f"\n=== Calculating Bracelet Prices for {grade} Grade ===")
+            
+            with self.db.get_read_session() as session:
+                recent_time = datetime.now() - timedelta(hours=24)
                 
-            with debug_context:
-                print(f"\n=== Calculating Bracelet Prices for {grade} Grade ===")
+                records = session.query(BraceletPriceRecord).filter(
+                    BraceletPriceRecord.timestamp >= recent_time,
+                    BraceletPriceRecord.grade == grade
+                ).all()
+
+                print(f"Found {len(records)} records in last 24 hours before deduplication")
                 
-                with self.db.get_read_session() as session:
-                    recent_time = datetime.now() - timedelta(hours=24)
-                    
-                    records = session.query(BraceletPriceRecord).filter(
-                        BraceletPriceRecord.timestamp >= recent_time,
-                        BraceletPriceRecord.grade == grade
-                    ).all()
+                # 중복 제거
+                records = self._get_unique_items(records)
+                print(f"Records after deduplication: {len(records)}")
 
-                    print(f"Found {len(records)} records in last 24 hours before deduplication")
-                    
-                    # 중복 제거
-                    records = self._get_unique_items(records)
-                    print(f"Records after deduplication: {len(records)}")
+                pattern_prices = {
+                    "전특2": {},
+                    "전특1+기본": {},
+                    "전특1+공이속": {},
+                    "전특1+잡옵": {},
+                    "전특1": {}
+                }
 
-                    pattern_prices = {
-                        "전특2": {},
-                        "전특1+기본": {},
-                        "전특1+공이속": {},
-                        "전특1+잡옵": {},
-                        "전특1": {}
+                # 패턴별 카운트 추가
+                pattern_counts = {k: 0 for k in pattern_prices.keys()}
+
+                for record in records:
+                    session.refresh(record)
+                    
+                    item_data = {
+                        'fixed_option_count': record.fixed_option_count,
+                        'extra_option_count': record.extra_option_count,
+                        'combat_stats': [(stat.stat_type, stat.value) for stat in record.combat_stats],
+                        'base_stats': [(stat.stat_type, stat.value) for stat in record.base_stats],
+                        'special_effects': [(effect.effect_type, effect.value) for effect in record.special_effects]
                     }
 
-                    # 패턴별 카운트 추가
-                    pattern_counts = {k: 0 for k in pattern_prices.keys()}
+                    # 디버깅을 위한 출력 추가
+                    print("\nProcessing record:")
+                    print(f"Fixed options: {record.fixed_option_count}")
+                    print(f"Extra options: {record.extra_option_count}")
+                    print(f"Combat stats: {item_data['combat_stats']}")
+                    print(f"Base stats: {item_data['base_stats']}")
+                    print(f"Special effects: {item_data['special_effects']}")
 
-                    for record in records:
-                        session.refresh(record)
+                    pattern_info = self._classify_bracelet_pattern(item_data)
+                    if not pattern_info:
+                        print("No pattern found for this record")
+                        continue
+
+                    pattern_type, details = pattern_info
+                    pattern_counts[pattern_type] += 1  # 패턴 카운트 증가
+                    
+                    key = (details['pattern'], details['values'], details['extra_slots'])
+                    
+                    if pattern_type not in pattern_prices:
+                        pattern_prices[pattern_type] = {}
+                    
+                    if key not in pattern_prices[pattern_type]:
+                        pattern_prices[pattern_type][key] = []
+                    
+                    pattern_prices[pattern_type][key].append(record.price)
+
+                # 패턴별 통계 출력
+                print("\nPattern counts:")
+                for pattern_type, count in pattern_counts.items():
+                    print(f"{pattern_type}: {count}")
+
+                # 최종 가격 계산
+                result = {}
+                for pattern_type, patterns in pattern_prices.items():
+                    print(f"\nProcessing {pattern_type} patterns:")
                         
-                        item_data = {
-                            'fixed_option_count': record.fixed_option_count,
-                            'extra_option_count': record.extra_option_count,
-                            'combat_stats': [(stat.stat_type, stat.value) for stat in record.combat_stats],
-                            'base_stats': [(stat.stat_type, stat.value) for stat in record.base_stats],
-                            'special_effects': [(effect.effect_type, effect.value) for effect in record.special_effects]
-                        }
-
-                        # 디버깅을 위한 출력 추가
-                        print("\nProcessing record:")
-                        print(f"Fixed options: {record.fixed_option_count}")
-                        print(f"Extra options: {record.extra_option_count}")
-                        print(f"Combat stats: {item_data['combat_stats']}")
-                        print(f"Base stats: {item_data['base_stats']}")
-                        print(f"Special effects: {item_data['special_effects']}")
-
-                        pattern_info = self._classify_bracelet_pattern(item_data)
-                        if not pattern_info:
-                            print("No pattern found for this record")
-                            continue
-
-                        pattern_type, details = pattern_info
-                        pattern_counts[pattern_type] += 1  # 패턴 카운트 증가
-                        
-                        key = (details['pattern'], details['values'], details['extra_slots'])
-                        
-                        if pattern_type not in pattern_prices:
-                            pattern_prices[pattern_type] = {}
-                        
-                        if key not in pattern_prices[pattern_type]:
-                            pattern_prices[pattern_type][key] = []
-                        
-                        pattern_prices[pattern_type][key].append(record.price)
-
-                    # 패턴별 통계 출력
-                    print("\nPattern counts:")
-                    for pattern_type, count in pattern_counts.items():
-                        print(f"{pattern_type}: {count}")
-
-                    # 최종 가격 계산
-                    result = {}
-                    for pattern_type, patterns in pattern_prices.items():
-                        print(f"\nProcessing {pattern_type} patterns:")
+                    result[pattern_type] = {}
+                    for key, prices in patterns.items():
+                        if len(prices) >= 2:
+                            sorted_prices = sorted(prices)
+                            selected_price = sorted_prices[1]
                             
-                        result[pattern_type] = {}
-                        for key, prices in patterns.items():
-                            if len(prices) >= 2:
-                                sorted_prices = sorted(prices)
-                                selected_price = sorted_prices[1]
-                                
-                                print(f"\n  Pattern {key}:")
-                                print(f"  - Total samples: {len(prices)}")
-                                print(f"  - Price range: {min(prices):,} ~ {max(prices):,}")
-                                print(f"  - Selected price: {selected_price:,}")
-                                
-                                result[pattern_type][key] = selected_price
+                            print(f"\n  Pattern {key}:")
+                            print(f"  - Total samples: {len(prices)}")
+                            print(f"  - Price range: {min(prices):,} ~ {max(prices):,}")
+                            print(f"  - Selected price: {selected_price:,}")
+                            
+                            result[pattern_type][key] = selected_price
 
-                    return result
+                return result
 
         except Exception as e:
             print(f"Error calculating bracelet prices: {e}")

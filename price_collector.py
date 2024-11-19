@@ -663,9 +663,9 @@ class SearchPresetGenerator:
         #             presets.append({'options': options})
 
         # 고정 효과 1개인 경우 (전투특성 1개만)
-        base_options = [
-            ("팔찌 옵션 수량", "고정 효과 수량", 1),
-        ]
+        # base_options = [
+        #     ("팔찌 옵션 수량", "고정 효과 수량", 1),
+        # ]
 
         # for combat_stat in combat_stats:
         #     for combat_stat_value in combat_stat_values:
@@ -674,11 +674,12 @@ class SearchPresetGenerator:
         #             ("전투 특성", combat_stat, combat_stat_value + combat_stat_bonus),
         #         ]
         #         presets.append({'options': options})
-        
-        options = base_options + [
-                    ("팔찌 옵션 수량", "부여 효과 수량", 1 + slot_bonus),
-                ]
-        presets.append({'options': options})
+
+        # 고정 효과 1개인 경우 (전투특성 1개만)
+        for fixed_slots in [1, 2]:
+            for extra_slots in [1, 2]:
+                options = [("팔찌 옵션 수량", "고정 효과 수량", fixed_slots), ("팔찌 옵션 수량", "부여 효과 수량", extra_slots + slot_bonus)]
+                presets.append({'options': options})
 
         return presets
 
@@ -772,7 +773,7 @@ class SearchPresetGenerator:
                 "FirstOption": option_dict_bracelet_first[opt_first_name],
                 "SecondOption": option_dict_bracelet_second[opt_second_name],
                 "MinValue": opt_value,
-                "MaxValue": None,
+                "MaxValue": opt_value,
             })
 
         return data

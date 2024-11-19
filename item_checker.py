@@ -1,5 +1,6 @@
 import os
 import time
+import threading
 import requests
 import numpy as np
 from datetime import datetime, timedelta
@@ -10,8 +11,7 @@ from market_price_cache import MarketPriceCache
 from sqlalchemy.orm import aliased
 
 class MarketScanner:
-    def __init__(self, db_manager, evaluator):
-        self.db = db_manager
+    def __init__(self, evaluator):
         self.evaluator = evaluator
         self.url = "https://developer-lostark.game.onstove.com/auctions/items"
 
@@ -252,11 +252,46 @@ class MarketScanner:
 
 
 class ItemEvaluator:
-    def __init__(self, db_manager, debug=False):
-        self.db = db_manager
+    def __init__(self, price_cache, debug=False):
         self.debug = debug
-        self.price_cache = MarketPriceCache(db_manager, debug)
+        self.price_cache = price_cache
+        self.last_check_time = self.price_cache.get_last_update_time()
+        
+        # 캐시 업데이트 체크 스레드 시작
+        self._stop_flag = threading.Event()
+        self._update_check_thread = threading.Thread(
+            target=self._check_cache_updates,
+            name="CacheUpdateChecker"
+        )
+        self._update_check_thread.daemon = True
+        self._update_check_thread.start()
 
+    def _check_cache_updates(self):
+        """주기적으로 캐시 파일 업데이트 확인"""
+        while not self._stop_flag.is_set():
+            try:
+                cache_update_time = self.price_cache.get_last_update_time()
+                
+                # 캐시 파일이 더 최신이면 리로드
+                if (cache_update_time and 
+                    (not self.last_check_time or cache_update_time > self.last_check_time)):
+                    if self.debug:
+                        print(f"New cache update detected: {cache_update_time}")
+                    
+                    # 캐시 리로드
+                    self.price_cache._load_cache()
+                    self.last_check_time = cache_update_time
+                    
+                    if self.debug:
+                        print("Cache reloaded successfully")
+            
+            except Exception as e:
+                if self.debug:
+                    print(f"Error checking cache updates: {e}")
+            
+            # 1분마다 체크
+            time.sleep(60)
+            
     def _get_reference_options(self, item: Dict, part: str) -> Dict[str, Any]:
         """
         아이템의 옵션들을 타입별로 분류
@@ -645,8 +680,9 @@ class ItemEvaluator:
 
 class MarketMonitor:
     def __init__(self, db_manager, debug=False):
-        self.evaluator = ItemEvaluator(db_manager, debug=debug)
-        self.scanner = MarketScanner(db_manager, self.evaluator)
+        price_cache = MarketPriceCache(db_manager, debug=debug)
+        self.evaluator = ItemEvaluator(price_cache, debug=debug)
+        self.scanner = MarketScanner(self.evaluator)
 
     def run(self):
         """모니터링 실행"""
@@ -664,7 +700,7 @@ class MarketMonitor:
                 time.sleep(5)
 
 def main():
-    db_manager = DatabaseManager()
+    db_manager = init_database()  # DatabaseManager() 대신 init_database() 사용
     monitor = MarketMonitor(db_manager, debug=False)
     monitor.run()
 

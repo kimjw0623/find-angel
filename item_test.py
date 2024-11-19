@@ -1,5 +1,6 @@
 import re
-from database import DatabaseManager
+from database import *
+from market_price_cache import MarketPriceCache
 from item_checker import ItemEvaluator
 
 def parse_market_item(line: str) -> dict:
@@ -104,8 +105,9 @@ def parse_market_item(line: str) -> dict:
 
 def main():
     # 데이터베이스 매니저와 평가기 초기화
-    db_manager = DatabaseManager()
-    evaluator = ItemEvaluator(db_manager, debug=True)
+    db_manager = init_database()  # DatabaseManager() 대신 init_database() 사용
+    price_cache = MarketPriceCache(db_manager, debug=True)
+    evaluator = ItemEvaluator(price_cache, debug=True)
     
     print("매물 정보를 입력하세요. 종료하려면 'q' 또는 'exit'를 입력하세요.")
     print("입력 형식 예시:")

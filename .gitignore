@@ -1,6 +1,7 @@
 .env
 __pycache__
 miscellaneous
+sim_result
 고대 1연마 딜러 귀걸이.png
 고대 1연마 딜러 목걸이.png
 고대 1연마 딜러 반지.png
@@ -24,3 +25,4 @@ lostark_prices.db-shm
 lostark_prices.db-wal
 market_price_cache.pkl
 price_calculation.log
+__pycache__/utils.cpython-39.pyc

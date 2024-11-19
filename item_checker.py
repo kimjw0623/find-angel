@@ -303,17 +303,17 @@ class ItemEvaluator:
                 reference_options["dealer_exclusive"].append((opt_name, opt["Value"]))
             
             # 서포터 전용 옵션
-            elif ((part == "목걸이" and opt_name in ["아덴게이지", "낙인력"]) or
+            if ((part == "목걸이" and opt_name in ["아덴게이지", "낙인력"]) or
                 (part == "귀걸이" and opt_name == "무공퍼") or  # 귀걸이 무공퍼 추가
                 (part == "반지" and opt_name in ["아공강", "아피강"])):
                 reference_options["support_exclusive"].append((opt_name, opt["Value"]))
             
             # 딜러용 보너스 옵션
-            elif opt_name in ["깡공", "깡무공"]:
+            if opt_name in ["깡공", "깡무공"]:
                 reference_options["dealer_bonus"].append((opt_name, opt["Value"]))
             
             # 서포터용 보너스 옵션
-            elif opt_name in ["최생", "최마", "아군회복", "아군보호막", "깡무공"]:
+            if opt_name in ["최생", "최마", "아군회복", "아군보호막", "깡무공"]:
                 reference_options["support_bonus"].append((opt_name, opt["Value"]))
 
         if self.debug:

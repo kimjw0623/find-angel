@@ -8,7 +8,6 @@ from utils import *
 from itertools import combinations, product
 from typing import List, Dict, Tuple, Any
 
-
 class PriceCollector(threading.Thread):
     def __init__(self, db_manager, interval=7200):  # 기본 2시간 간격
         super().__init__()
@@ -157,6 +156,7 @@ class PriceCollector(threading.Thread):
     def save_acc_items(self, items, search_cycle_id):
         """처리된 아이템 데이터를 DB에 저장"""
         with self.db.get_write_session() as session:
+            dup_item_num = 0
             for item_data in items:
                 # 1차 필터링: 기본 정보로 후보 아이템 조회
                 candidate_items = session.query(PriceRecord).filter(
@@ -181,6 +181,7 @@ class PriceCollector(threading.Thread):
                     # 모든 옵션이 일치하는지 확인
                     if existing_options == new_options:
                         is_duplicate = True
+                        dup_item_num += 1
                         break
 
                 if is_duplicate:
@@ -218,10 +219,12 @@ class PriceCollector(threading.Thread):
                     record.raw_options.append(raw_option)
 
                 session.add(record)
+            return dup_item_num
 
     def save_bracelet_items(self, items, search_cycle_id):
         """처리된 팔찌 데이터를 DB에 저장"""
         with self.db.get_write_session() as session:
+            dup_item_num = 0
             for item_data in items:
                 # 1차 필터링: 기본 정보로 후보 아이템 조회
                 candidate_items = session.query(BraceletPriceRecord).filter(
@@ -260,6 +263,7 @@ class PriceCollector(threading.Thread):
                     if (existing_combat_stats == new_combat_stats and
                         existing_base_stats == new_base_stats and
                         existing_special_effects == new_special_effects):
+                        dup_item_num += 1
                         is_duplicate = True
                         break
 
@@ -303,6 +307,7 @@ class PriceCollector(threading.Thread):
                     record.special_effects.append(special_effect)
 
                 session.add(record)
+            return dup_item_num
 
     def collect_prices(self):
         """각 부위별, 등급별 가격 수집"""
@@ -312,68 +317,110 @@ class PriceCollector(threading.Thread):
         # 악세서리
         parts = ["목걸이", "귀걸이", "반지"]
         grades = ["고대", "유물"]
+        ACC_MAX_PAGES = 1000  # 최대 3페이지까지만 수집
+        BRACELET_MAX_PAGES = 1000 # 최대 1페이지까지만 수집
 
         total_collected = 0
         for grade in grades:
             for part in parts:
                 # 해당 부위의 모든 프리셋 생성
                 presets = self.preset_generator.generate_presets_acc(part)
-
+                print(presets)
                 for preset in presets:
                     try:
-                        # API 요청 간격 조절
-                        time.sleep(1.0)
-
-                        # 프리셋으로 검색 데이터 생성
+                        # 첫 페이지 요청
                         search_data = self.preset_generator.create_search_data_acc(
-                            preset, grade)
-
-                        # API 요청 및 응답 처리
+                            preset, grade, part, page_no=1)
                         response = do_search(
                             self.url, self.headers, search_data, error_log=False)
-                        processed_items = self.process_acc_response(
-                            response, grade, part)
+                        
+                        # 첫 페이지 처리
+                        processed_items = self.process_acc_response(response, grade, part)
+                        if not processed_items:
+                            continue
 
-                        if processed_items:
-                            self.save_acc_items(processed_items, self.current_cycle_id)
-                            total_collected += len(processed_items)
-                            print(f"Collected {len(processed_items)} items for {grade} {part} "
-                                  f"(Level: {preset['enhancement_level']}, "
-                                  f"Quality: {preset['quality']}, "
-                                  f"Options: {preset['options']})")
+                        # 첫 페이지 저장
+                        dup_item_num = self.save_acc_items(processed_items, self.current_cycle_id)
+                        total_collected += len(processed_items)
+                        
+                        # 총 매물 수 확인
+                        total_count = response.json()["TotalCount"]
+                        pages_to_fetch = min(ACC_MAX_PAGES, (total_count + 9) // 10)  # 올림 나눗셈
+
+                        print(f"Found {total_count} items for {grade} {part} "
+                            f"(Level: {preset['enhancement_level']}, "
+                            f"Quality: {preset['quality']}, "
+                            f"Options: {preset['options']}), {len(processed_items) - dup_item_num}/{len(processed_items)} are collected")
+
+                        # 추가 페이지 처리
+                        for page in range(2, pages_to_fetch + 1):
+                            time.sleep(SEARCH_INTERVAL)  # API 요청 간격
+                            
+                            search_data = self.preset_generator.create_search_data_acc(
+                                preset, grade, part, page_no=page)
+                            response = do_search(
+                                self.url, self.headers, search_data, error_log=False)
+                            processed_items = self.process_acc_response(
+                                response, grade, part)
+                            
+                            if processed_items:
+                                dup_item_num = self.save_acc_items(processed_items, self.current_cycle_id)
+                                total_collected += len(processed_items)
+                                print(f"Collected additional {len(processed_items) - dup_item_num}/{len(processed_items)} are collected items from page {page}")
 
                     except Exception as e:
                         print(f"Error collecting {grade} {part}: {e}")
                         continue
 
-        # 팔찌
-        for grade in grades:
+                    time.sleep(SEARCH_INTERVAL)  # 다음 프리셋 검색 전 대기
+
+            # 팔찌 (동일한 페이지네이션 로직 적용)
             presets = self.preset_generator.generate_presets_bracelet(grade)
 
             for preset in presets:
                 try:
-                    # API 요청 간격 조절
-                    time.sleep(1.0)
-
-                    # 프리셋으로 검색 데이터 생성
+                    # 첫 페이지 요청
                     search_data = self.preset_generator.create_search_data_bracelet(
-                        preset, grade)
-
-                    # API 요청 및 응답 처리
+                        preset, grade, page_no=1)
                     response = do_search(
                         self.url, self.headers, search_data, error_log=False)
-                    processed_items = self.process_bracelet_response(
-                        response, grade)
+                    
+                    # 첫 페이지 처리
+                    processed_items = self.process_bracelet_response(response, grade)
+                    if not processed_items:
+                        continue
 
-                    if processed_items:
-                        self.save_bracelet_items(processed_items, self.current_cycle_id)
-                        total_collected += len(processed_items)
-                        print(
-                            f"Collected {len(processed_items)} bracelet items for {grade}, {preset}")
+                    # 첫 페이지 저장
+                    dup_item_num = self.save_bracelet_items(processed_items, self.current_cycle_id)
+                    total_collected += len(processed_items)
+                    
+                    # 총 매물 수 확인
+                    total_count = response.json()["TotalCount"]
+                    pages_to_fetch = min(BRACELET_MAX_PAGES, (total_count + 9) // 10)
+
+                    print(f"Found {total_count} bracelet items for {grade}, {preset}, {len(processed_items) - dup_item_num}/{len(processed_items)} are collected")
+
+                    # 추가 페이지 처리
+                    for page in range(2, pages_to_fetch + 1):
+                        time.sleep(SEARCH_INTERVAL)
+                        
+                        search_data = self.preset_generator.create_search_data_bracelet(
+                            preset, grade, page_no=page)
+                        response = do_search(
+                            self.url, self.headers, search_data, error_log=False)
+                        processed_items = self.process_bracelet_response(
+                            response, grade)
+                        
+                        if processed_items:
+                            dup_item_num = self.save_bracelet_items(processed_items, self.current_cycle_id)
+                            total_collected += len(processed_items)
+                            print(f"Collected additional {len(processed_items) - dup_item_num}/{len(processed_items)} bracelet items from page {page}")
 
                 except Exception as e:
                     print(f"Error collecting {grade} bracelet: {e}")
                     continue
+
+                time.sleep(SEARCH_INTERVAL)
 
         print(f"Total collected items: {total_collected}")
 
@@ -392,86 +439,87 @@ class PriceCollector(threading.Thread):
 
 class SearchPresetGenerator:
     def __init__(self):
-        self.qualities = [60, 70, 80, 90]
+        # self.qualities = [60, 70, 80, 90]
+        self.qualities = [60]
         self.enhancement_levels = [0, 1, 2, 3]
 
         # 특수 옵션만 정의 (부가 옵션 제거)
         self.special_options = {
             "목걸이": [
                 [],  # 특수 옵션 없는 경우
-                # 딜러용
-                # 특수 옵션 1개
-                [("추피", 1)], [("적주피", 1)],
-                [("추피", 2)], [("적주피", 2)],
-                [("추피", 3)], [("적주피", 3)],
-                # 특수 옵션 2개 - 모든 가능한 조합
-                [("추피", 1), ("적주피", 1)],
-                [("추피", 1), ("적주피", 2)],
-                [("추피", 1), ("적주피", 3)],
-                [("추피", 2), ("적주피", 1)],
-                [("추피", 2), ("적주피", 2)],
-                [("추피", 2), ("적주피", 3)],
-                [("추피", 3), ("적주피", 1)],
-                [("추피", 3), ("적주피", 2)],
-                [("추피", 3), ("적주피", 3)],
-                # 서폿용
-                [("아덴게이지", 1)], [("낙인력", 1)],
-                [("아덴게이지", 2)], [("낙인력", 2)],
-                [("아덴게이지", 3)], [("낙인력", 3)],
-                [("아덴게이지", 1), ("낙인력", 1)],
-                [("아덴게이지", 1), ("낙인력", 2)],
-                [("아덴게이지", 1), ("낙인력", 3)],
-                [("아덴게이지", 2), ("낙인력", 1)],
-                [("아덴게이지", 2), ("낙인력", 2)],
-                [("아덴게이지", 2), ("낙인력", 3)],
-                [("아덴게이지", 3), ("낙인력", 1)],
-                [("아덴게이지", 3), ("낙인력", 2)],
-                [("아덴게이지", 3), ("낙인력", 3)],
+                # # 딜러용
+                # # 특수 옵션 1개
+                # [("추피", 1)], [("적주피", 1)],
+                # [("추피", 2)], [("적주피", 2)],
+                # [("추피", 3)], [("적주피", 3)],
+                # # 특수 옵션 2개 - 모든 가능한 조합
+                # [("추피", 1), ("적주피", 1)],
+                # [("추피", 1), ("적주피", 2)],
+                # [("추피", 1), ("적주피", 3)],
+                # [("추피", 2), ("적주피", 1)],
+                # [("추피", 2), ("적주피", 2)],
+                # [("추피", 2), ("적주피", 3)],
+                # [("추피", 3), ("적주피", 1)],
+                # [("추피", 3), ("적주피", 2)],
+                # [("추피", 3), ("적주피", 3)],
+                # # 서폿용
+                # [("아덴게이지", 1)], [("낙인력", 1)],
+                # [("아덴게이지", 2)], [("낙인력", 2)],
+                # [("아덴게이지", 3)], [("낙인력", 3)],
+                # [("아덴게이지", 1), ("낙인력", 1)],
+                # [("아덴게이지", 1), ("낙인력", 2)],
+                # [("아덴게이지", 1), ("낙인력", 3)],
+                # [("아덴게이지", 2), ("낙인력", 1)],
+                # [("아덴게이지", 2), ("낙인력", 2)],
+                # [("아덴게이지", 2), ("낙인력", 3)],
+                # [("아덴게이지", 3), ("낙인력", 1)],
+                # [("아덴게이지", 3), ("낙인력", 2)],
+                # [("아덴게이지", 3), ("낙인력", 3)],
             ],
             "귀걸이": [
                 [],
-                [("공퍼", 1)], [("무공퍼", 1)],
-                [("공퍼", 2)], [("무공퍼", 2)],
-                [("공퍼", 3)], [("무공퍼", 3)],
-                [("공퍼", 1), ("무공퍼", 1)],
-                [("공퍼", 1), ("무공퍼", 2)],
-                [("공퍼", 1), ("무공퍼", 3)],
-                [("공퍼", 2), ("무공퍼", 1)],
-                [("공퍼", 2), ("무공퍼", 2)],
-                [("공퍼", 2), ("무공퍼", 3)],
-                [("공퍼", 3), ("무공퍼", 1)],
-                [("공퍼", 3), ("무공퍼", 2)],
-                [("공퍼", 3), ("무공퍼", 3)],
+                # [("공퍼", 1)], [("무공퍼", 1)],
+                # [("공퍼", 2)], [("무공퍼", 2)],
+                # [("공퍼", 3)], [("무공퍼", 3)],
+                # [("공퍼", 1), ("무공퍼", 1)],
+                # [("공퍼", 1), ("무공퍼", 2)],
+                # [("공퍼", 1), ("무공퍼", 3)],
+                # [("공퍼", 2), ("무공퍼", 1)],
+                # [("공퍼", 2), ("무공퍼", 2)],
+                # [("공퍼", 2), ("무공퍼", 3)],
+                # [("공퍼", 3), ("무공퍼", 1)],
+                # [("공퍼", 3), ("무공퍼", 2)],
+                # [("공퍼", 3), ("무공퍼", 3)],
             ],
             "반지": [
                 [],
                 # 딜러용
-                [("치적", 1)], [("치피", 1)],
-                [("치적", 2)], [("치피", 2)],
-                [("치적", 3)], [("치피", 3)],
-                [("치적", 1), ("치피", 1)],
-                [("치적", 1), ("치피", 2)],
-                [("치적", 1), ("치피", 3)],
-                [("치적", 2), ("치피", 1)],
-                [("치적", 2), ("치피", 2)],
-                [("치적", 2), ("치피", 3)],
-                [("치적", 3), ("치피", 1)],
-                [("치적", 3), ("치피", 2)],
-                [("치적", 3), ("치피", 3)],
+                # [("치적", 1)], [("치피", 1)],
+                # [("치적", 2)], [("치피", 2)],
+                # [("치적", 3)], [("치피", 3)],
+                # [("치적", 1), ("치피", 1)],
+                # [("치적", 1), ("치피", 2)],
+                # [("치적", 1), ("치피", 3)],
+                # [("치적", 2), ("치피", 1)],
+                # [("치적", 2), ("치피", 2)],
+                # [("치적", 2), ("치피", 3)],
+                # [("치적", 3), ("치피", 1)],
+                # [("치적", 3), ("치피", 2)],
+                # [("치적", 3), ("치피", 3)],
 
                 # 서폿용
-                [("아공강", 1)], [("아피강", 1)],
-                [("아공강", 2)], [("아피강", 2)],
-                [("아공강", 3)], [("아피강", 3)],
-                [("아공강", 1), ("아피강", 1)],
-                [("아공강", 1), ("아피강", 2)],
-                [("아공강", 1), ("아피강", 3)],
-                [("아공강", 2), ("아피강", 1)],
-                [("아공강", 2), ("아피강", 2)],
-                [("아공강", 2), ("아피강", 3)],
-                [("아공강", 3), ("아피강", 1)],
-                [("아공강", 3), ("아피강", 2)],
-                [("아공강", 3), ("아피강", 3)],
+                # [("아공강", 1)], [("아피강", 1)],
+                # [("아공강", 2)], [("아피강", 2)],
+                # [("아공강", 3)], [("아피강", 3)],
+                # [("아공강", 1), ("아피강", 1)],
+                # [("아공강", 1), ("아피강", 2)],
+                # [("아공강", 1), ("아피강", 3)],
+                # [("아공강", 2), ("아피강", 1)],
+                # [("아공강", 2), ("아피강", 2)],
+                # [("아공강", 2), ("아피강", 3)],
+                # [("아공강", 3), ("아피강", 1)],
+                # [("아공강", 3), ("아피강", 2)],
+                # [("아공강", 3), ("아피강", 3)],
             ]
         }
 
@@ -547,8 +595,10 @@ class SearchPresetGenerator:
         base_stat_bonus = 3200 if grade == "고대" else 0     # 주스탯 증가
 
         # 기본 수치 설정
-        combat_stat_values = [40, 50, 60, 70, 80, 90]
-        base_stat_values = [6400, 8000, 9600, 11200]
+        # combat_stat_values = [40, 50, 60, 70, 80, 90]
+        combat_stat_values = [40]
+        # base_stat_values = [6400, 8000, 9600, 11200]
+        base_stat_values = [6400]
         combat_stats = ["특화", "치명", "신속"]
         base_stats = ["힘", "민첩", "지능"]
 
@@ -623,23 +673,18 @@ class SearchPresetGenerator:
 
         return presets
 
-    def create_search_data_acc(self, preset: Dict, grade: str, page_no: int = 1) -> Dict:
+    def create_search_data_acc(self, preset: Dict, grade: str, part: str, page_no: int = 1) -> Dict:
         """생성된 프리셋으로 검색 데이터 생성"""
         level = preset['enhancement_level']
         quality = preset['quality']
         options = preset['options']
 
-        # 연마 단계에 따른 enpoints 계산
-        is_necklace = any(opt[0] in necklace_only_list for opt in options)
-        if is_necklace:
-            enpoints = 4 + level_enpoint[grade][level]
-        else:
-            enpoints = 3 + level_enpoint[grade][level]
-
         data = {
             "ItemLevelMin": 0,
             "ItemLevelMax": 1800,
             "ItemGradeQuality": quality,
+            "ItemUpgradeLevel": level,
+            "ItemTradeAllowCount": None,
             "SkillOptions": [
                 {
                     "FirstOption": None,
@@ -649,12 +694,12 @@ class SearchPresetGenerator:
                 }
             ],
             "EtcOptions": [
-                {
-                    "FirstOption": 8,
-                    "SecondOption": 1,
-                    "MinValue": enpoints,
-                    "MaxValue": enpoints
-                },
+                # {
+                #     "FirstOption": 8,
+                #     "SecondOption": 1,
+                #     "MinValue": enpoints,
+                #     "MaxValue": enpoints
+                # },
             ],
             "Sort": "BUY_PRICE",
             # 200010 목걸이, 20 귀걸이, 30 반지, 40 팔찌, 200000 장신구
@@ -662,6 +707,7 @@ class SearchPresetGenerator:
             "CharacterClass": "",
             "ItemTier": 4,
             "ItemGrade": grade,
+            "ItemName": part,
             "PageNo": page_no,
             "SortCondition": "ASC"
         }
@@ -765,7 +811,7 @@ if __name__ == "__main__":
     
     print("Starting price collector...")
     db_manager = init_database()  # DatabaseManager() 대신 init_database() 사용
-    collector = PriceCollector(db_manager)
+    collector = PriceCollector(db_manager, interval=1800)
     collector.start()
     
     try:

@@ -12,7 +12,7 @@ from contextlib import contextmanager, nullcontext
 def redirect_stdout(file_path):
     """stdout을 파일로 임시 리다이렉트하는 컨텍스트 매니저"""
     original_stdout = sys.stdout
-    with open(file_path, 'a', encoding='utf-8') as f:
+    with open(file_path, 'w', encoding='utf-8') as f:
         sys.stdout = f
         try:
             yield

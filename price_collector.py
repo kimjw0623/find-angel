@@ -7,13 +7,13 @@ from database import *
 from utils import *
 from itertools import combinations, product
 from typing import List, Dict, Tuple, Any
+from market_price_cache import MarketPriceCache
 
 class PriceCollector(threading.Thread):
-    def __init__(self, db_manager, interval=7200):  # 기본 2시간 간격
+    def __init__(self, db_manager):  # 기본 2시간 간격
         super().__init__()
         self.daemon = True
         self.db = db_manager
-        self.interval = interval
         self.current_cycle_id = None  # 추가
         self.url = "https://developer-lostark.game.onstove.com/auctions/items"
         self.headers = {
@@ -311,131 +311,181 @@ class PriceCollector(threading.Thread):
 
     def collect_prices(self):
         """각 부위별, 등급별 가격 수집"""
-        # 사이클 시작할 때 ID 생성
-        self.current_cycle_id = datetime.now().strftime("%Y%m%d_%H%M")
-        
-        # 악세서리
-        parts = ["목걸이", "귀걸이", "반지"]
-        grades = ["고대", "유물"]
-        ACC_MAX_PAGES = 3600  # 최대 3페이지까지만 수집
-        BRACELET_MAX_PAGES = 3600 # 최대 1페이지까지만 수집
+        try:
+            # 사이클 시작할 때 ID 생성
+            self.current_cycle_id = datetime.now().strftime("%Y%m%d_%H%M")
+            
+            # 악세서리
+            parts = ["목걸이", "귀걸이", "반지"]
+            grades = ["고대", "유물"]
+            ACC_MAX_PAGES = 1000  # API에서 10000개 이후로 안 나옴
+            BRACELET_MAX_PAGES = 1000 # API에서 10000개 이후로 안 나옴
 
-        total_collected = 0
-        for grade in grades:
-            for part in parts:
-                # 해당 부위의 모든 프리셋 생성
-                presets = self.preset_generator.generate_presets_acc(part)
+            total_collected = 0
+            for grade in grades:
+                for part in parts:
+                    # 해당 부위의 모든 프리셋 생성
+                    presets = self.preset_generator.generate_presets_acc(part)
+                    print(presets)
+                    for preset in presets:
+                        try:
+                            # 첫 페이지 요청
+                            search_data = self.preset_generator.create_search_data_acc(
+                                preset, grade, part, page_no=1)
+                            response = do_search(
+                                self.url, self.headers, search_data, error_log=False)
+                            
+                            # 첫 페이지 처리
+                            processed_items = self.process_acc_response(response, grade, part)
+                            if not processed_items:
+                                continue
+
+                            # 첫 페이지 저장
+                            dup_item_num = self.save_acc_items(processed_items, self.current_cycle_id)
+                            total_collected += len(processed_items)
+                            
+                            # 총 매물 수 확인
+                            total_count = response.json()["TotalCount"]
+                            pages_to_fetch = min(ACC_MAX_PAGES, (total_count + 9) // 10)  # 올림 나눗셈
+
+                            print(f"Found {total_count} items for {grade} {part} "
+                                f"(Level: {preset['enhancement_level']}, "
+                                f"Quality: {preset['quality']}, "
+                                f"Options: {preset['options']}), {len(processed_items) - dup_item_num}/{len(processed_items)} are collected")
+
+                            # 추가 페이지 처리
+                            for page in range(2, pages_to_fetch + 1):
+                                time.sleep(SEARCH_INTERVAL)  # API 요청 간격
+                                
+                                search_data = self.preset_generator.create_search_data_acc(
+                                    preset, grade, part, page_no=page)
+                                response = do_search(
+                                    self.url, self.headers, search_data, error_log=False)
+                                processed_items = self.process_acc_response(
+                                    response, grade, part)
+                                
+                                if processed_items:
+                                    dup_item_num = self.save_acc_items(processed_items, self.current_cycle_id)
+                                    total_collected += len(processed_items)
+                                    print(f"Collected additional {len(processed_items) - dup_item_num}/{len(processed_items)} are collected items from page {page}")
+
+                        except Exception as e:
+                            print(f"Error collecting {grade} {part}: {e}")
+                            continue
+
+                        time.sleep(SEARCH_INTERVAL)  # 다음 프리셋 검색 전 대기
+
+                # 팔찌 (동일한 페이지네이션 로직 적용)
+                presets = self.preset_generator.generate_presets_bracelet(grade)
                 print(presets)
+
                 for preset in presets:
                     try:
                         # 첫 페이지 요청
-                        search_data = self.preset_generator.create_search_data_acc(
-                            preset, grade, part, page_no=1)
+                        search_data = self.preset_generator.create_search_data_bracelet(
+                            preset, grade, page_no=1)
                         response = do_search(
                             self.url, self.headers, search_data, error_log=False)
                         
                         # 첫 페이지 처리
-                        processed_items = self.process_acc_response(response, grade, part)
+                        processed_items = self.process_bracelet_response(response, grade)
                         if not processed_items:
                             continue
 
                         # 첫 페이지 저장
-                        dup_item_num = self.save_acc_items(processed_items, self.current_cycle_id)
+                        dup_item_num = self.save_bracelet_items(processed_items, self.current_cycle_id)
                         total_collected += len(processed_items)
                         
                         # 총 매물 수 확인
                         total_count = response.json()["TotalCount"]
-                        pages_to_fetch = min(ACC_MAX_PAGES, (total_count + 9) // 10)  # 올림 나눗셈
+                        pages_to_fetch = min(BRACELET_MAX_PAGES, (total_count + 9) // 10)
 
-                        print(f"Found {total_count} items for {grade} {part} "
-                            f"(Level: {preset['enhancement_level']}, "
-                            f"Quality: {preset['quality']}, "
-                            f"Options: {preset['options']}), {len(processed_items) - dup_item_num}/{len(processed_items)} are collected")
+                        print(f"Found {total_count} bracelet items for {grade}, {preset}, {len(processed_items) - dup_item_num}/{len(processed_items)} are collected")
 
                         # 추가 페이지 처리
                         for page in range(2, pages_to_fetch + 1):
-                            time.sleep(SEARCH_INTERVAL)  # API 요청 간격
+                            time.sleep(SEARCH_INTERVAL)
                             
-                            search_data = self.preset_generator.create_search_data_acc(
-                                preset, grade, part, page_no=page)
+                            search_data = self.preset_generator.create_search_data_bracelet(
+                                preset, grade, page_no=page)
                             response = do_search(
                                 self.url, self.headers, search_data, error_log=False)
-                            processed_items = self.process_acc_response(
-                                response, grade, part)
+                            processed_items = self.process_bracelet_response(
+                                response, grade)
                             
                             if processed_items:
-                                dup_item_num = self.save_acc_items(processed_items, self.current_cycle_id)
+                                dup_item_num = self.save_bracelet_items(processed_items, self.current_cycle_id)
                                 total_collected += len(processed_items)
-                                print(f"Collected additional {len(processed_items) - dup_item_num}/{len(processed_items)} are collected items from page {page}")
+                                print(f"Collected additional {len(processed_items) - dup_item_num}/{len(processed_items)} bracelet items from page {page}")
 
                     except Exception as e:
-                        print(f"Error collecting {grade} {part}: {e}")
+                        print(f"Error collecting {grade} bracelet: {e}")
                         continue
 
-                    time.sleep(SEARCH_INTERVAL)  # 다음 프리셋 검색 전 대기
+                    time.sleep(SEARCH_INTERVAL)
 
-            # 팔찌 (동일한 페이지네이션 로직 적용)
-            presets = self.preset_generator.generate_presets_bracelet(grade)
-            print(presets)
-
-            for preset in presets:
-                try:
-                    # 첫 페이지 요청
-                    search_data = self.preset_generator.create_search_data_bracelet(
-                        preset, grade, page_no=1)
-                    response = do_search(
-                        self.url, self.headers, search_data, error_log=False)
-                    
-                    # 첫 페이지 처리
-                    processed_items = self.process_bracelet_response(response, grade)
-                    if not processed_items:
-                        continue
-
-                    # 첫 페이지 저장
-                    dup_item_num = self.save_bracelet_items(processed_items, self.current_cycle_id)
-                    total_collected += len(processed_items)
-                    
-                    # 총 매물 수 확인
-                    total_count = response.json()["TotalCount"]
-                    pages_to_fetch = min(BRACELET_MAX_PAGES, (total_count + 9) // 10)
-
-                    print(f"Found {total_count} bracelet items for {grade}, {preset}, {len(processed_items) - dup_item_num}/{len(processed_items)} are collected")
-
-                    # 추가 페이지 처리
-                    for page in range(2, pages_to_fetch + 1):
-                        time.sleep(SEARCH_INTERVAL)
-                        
-                        search_data = self.preset_generator.create_search_data_bracelet(
-                            preset, grade, page_no=page)
-                        response = do_search(
-                            self.url, self.headers, search_data, error_log=False)
-                        processed_items = self.process_bracelet_response(
-                            response, grade)
-                        
-                        if processed_items:
-                            dup_item_num = self.save_bracelet_items(processed_items, self.current_cycle_id)
-                            total_collected += len(processed_items)
-                            print(f"Collected additional {len(processed_items) - dup_item_num}/{len(processed_items)} bracelet items from page {page}")
-
-                except Exception as e:
-                    print(f"Error collecting {grade} bracelet: {e}")
-                    continue
-
-                time.sleep(SEARCH_INTERVAL)
-
-        print(f"Total collected items: {total_collected}")
+            print(f"Total collected items: {total_collected}")
+            
+            if total_collected > 0:  # 새로운 데이터가 수집된 경우에만
+                # 캐시 업데이트 실행
+                cache = MarketPriceCache(self.db)
+                cache.update_cache()
+                print(f"Cache updated at {datetime.now()}")
+        
+        except Exception as e:
+            print(f"Error in price collection: {e}")
 
     def run(self):
         """메인 스레드 실행"""
+        def get_next_run_time():
+            """다음 실행 시간 계산 (다음 짝수 시간)"""
+            now = datetime.now()
+            current_hour = now.hour
+            next_hour = current_hour + (2 - current_hour % 2)  # 다음 짝수 시간
+            
+            next_run = now.replace(hour=next_hour, minute=0, second=0, microsecond=0)
+            if next_run <= now:  # 이미 지난 시간이면 다음 주기로
+                next_run += timedelta(hours=2)
+            return next_run
+
         while True:
             try:
-                print(f"Starting price collection at {datetime.now()}")
+                # 다음 실행 시간까지 대기
+                next_run = get_next_run_time()
+                wait_seconds = (next_run - datetime.now()).total_seconds()
+                if wait_seconds > 0:
+                    print(f"다음 실행 시간: {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
+                    print(f"대기 중... ({int(wait_seconds)}초)")
+                    time.sleep(wait_seconds)
+
+                # 가격 수집 실행
+                start_time = datetime.now()
+                print(f"Starting price collection at {start_time}")
+                
                 self.collect_prices()
-                print(f"Completed price collection at {datetime.now()}")
+                
+                end_time = datetime.now()
+                duration = end_time - start_time
+                
+                # 소요 시간 계산
+                hours, remainder = divmod(duration.total_seconds(), 3600)
+                minutes, seconds = divmod(remainder, 60)
+                
+                # 소요 시간 표시
+                duration_str = []
+                if hours > 0:
+                    duration_str.append(f"{int(hours)}시간")
+                if minutes > 0:
+                    duration_str.append(f"{int(minutes)}분")
+                duration_str.append(f"{int(seconds)}초")
+                
+                print(f"Completed price collection at {end_time}")
+                print(f"총 소요 시간: {' '.join(duration_str)}")
+                
             except Exception as e:
                 print(f"Error in price collection: {e}")
-
-            time.sleep(self.interval)
+                # 에러 발생 시 1분 대기 후 재시도
+                time.sleep(60)
 
 
 class SearchPresetGenerator:
@@ -778,50 +828,13 @@ class SearchPresetGenerator:
 
         return data
 
-
-def example_usage():
-    generator = SearchPresetGenerator()
-
-    # 목걸이 프리셋 생성 예시
-    necklace_presets = generator.generate_presets_acc("귀걸이")
-    print(f"Total number of necklace presets: {len(necklace_presets)}")
-
-    # 각 연마 단계별 프리셋 수 출력
-    for level in [0, 1, 2, 3]:
-        level_presets = [
-            p for p in necklace_presets if p['enhancement_level'] == level]
-        print(f"\nLevel {level} presets: {len(level_presets)}")
-        if level < 4:  # 모든 프리셋 출력
-            print("Presets:")
-            for p in level_presets:
-                print(f"  {p}")
-
-    return necklace_presets
-
-
-def example_usage_bracelet():
-    generator = SearchPresetGenerator()
-
-    # 목걸이 프리셋 생성 예시
-    presets = generator.generate_presets_bracelet("유물")
-    print(f"Total number of necklace presets: {len(presets)}")
-
-    for p in presets:
-        print(p)
-
-    return presets
-
 if __name__ == "__main__":
-    # example_usage() 와 example_usage_bracelet() 는 테스트용이므로 주석 처리
-    # example_usage()
-    # example_usage_bracelet()
-    
     # 환경 변수 로드
     load_dotenv()
     
     print("Starting price collector...")
     db_manager = init_database()  # DatabaseManager() 대신 init_database() 사용
-    collector = PriceCollector(db_manager, interval=1800)
+    collector = PriceCollector(db_manager)
     collector.start()
     
     try:

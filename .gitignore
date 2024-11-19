@@ -26,3 +26,7 @@ lostark_prices.db-wal
 market_price_cache.pkl
 price_calculation.log
 __pycache__/utils.cpython-39.pyc
+price_log
+market_price_cache_0.pkl
+market_price_cache_1.pkl
+market_price_cache_active.txt

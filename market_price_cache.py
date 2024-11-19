@@ -6,6 +6,7 @@ import pickle
 import time
 import os
 import sys
+import threading
 from contextlib import contextmanager, nullcontext
 
 @contextmanager
@@ -19,21 +20,142 @@ def redirect_stdout(file_path, mode='a'):
         finally:
             sys.stdout = original_stdout
 
+class DoubleBufferCache:
+    def __init__(self, cache_name: str):
+        """
+        Double buffering cache initialization
+        cache_name: 캐시 파일의 기본 이름 (예: 'market_price')
+        """
+        self.cache_name = cache_name
+        self.cache_files = [f"{cache_name}_0.pkl", f"{cache_name}_1.pkl"]
+        self.active_index_file = f"{cache_name}_active.txt"  # 현재 활성화된 캐시 인덱스
+        self.lock_file_path = f"{cache_name}_active.lock"  # 현재 활성화된 캐시 인덱스의 락 파일
+        self._initialize_cache_files()
+
+    def _initialize_cache_files(self):
+        """캐시 파일이 없는 경우 빈 캐시로 초기화"""
+        empty_cache = {
+            'data': {},
+            'last_update': None
+        }
+        for file in self.cache_files:
+            if not os.path.exists(file):
+                with open(file, 'wb') as f:
+                    pickle.dump(empty_cache, f)
+
+        # active_index_file 초기화
+        if not os.path.exists(self.active_index_file):
+            with open(self.active_index_file, 'w') as f:
+                f.write('0|None')
+
+    def get_active_cache(self) -> tuple[Any, Optional[datetime]]:
+        """현재 활성화된 캐시 데이터와 마지막 업데이트 시간 반환"""
+        self._acquire_lock()
+        try:
+            with open(self.active_index_file, 'r') as f:
+                active_index, last_update_str = f.read().strip().split('|')
+                active_index = int(active_index)
+                if last_update_str == 'None':
+                    last_update = None
+                else:
+                    last_update = datetime.fromisoformat(last_update_str)
+            active_file = self.cache_files[active_index]
+            try:
+                with open(active_file, 'rb') as f:
+                    cache_data = pickle.load(f)
+                return cache_data['data'], last_update
+            except Exception as e:
+                print(f"Error reading active cache: {e}")
+                return {}, None
+        finally:
+            self._release_lock()
+
+    def update_cache(self, new_data: Any) -> bool:
+        """
+        새로운 데이터로 캐시 업데이트
+        1. 비활성 캐시에 새 데이터 쓰기
+        2. 성공하면 활성 캐시 전환
+        """
+        self._acquire_lock()
+        try:
+            with open(self.active_index_file, 'r') as f:
+                active_index, _ = f.read().strip().split('|')
+                active_index = int(active_index)
+            pending_index = 1 - active_index
+            pending_file = self.cache_files[pending_index]
+
+            try:
+                # 새 데이터를 비활성 캐시에 쓰기
+                cache_data = {
+                    'data': new_data,
+                    'last_update': datetime.now()
+                }
+                with open(pending_file, 'wb') as f:
+                    pickle.dump(cache_data, f)
+
+                # 캐시 전환
+                with open(self.active_index_file, 'w') as f:
+                    f.write(f"{pending_index}|{cache_data['last_update'].isoformat()}")
+                return True
+
+            except Exception as e:
+                print(f"Error updating cache: {e}")
+                return False
+        finally:
+            self._release_lock()
+
+    def get_last_update_time(self) -> Optional[datetime]:
+        """현재 활성화된 캐시의 마지막 업데이트 시간 반환"""
+        self._acquire_lock()
+        try:
+            with open(self.active_index_file, 'r') as f:
+                active_index, last_update_str = f.read().strip().split('|')
+                if last_update_str == 'None':
+                    return None
+                else:
+                    return datetime.fromisoformat(last_update_str)
+        finally:
+            self._release_lock()
+
+    def cleanup(self):
+        """캐시 파일 정리 (필요한 경우)"""
+        try:
+            for file in self.cache_files:
+                if os.path.exists(file):
+                    os.remove(file)
+            if os.path.exists(self.active_index_file):
+                os.remove(self.active_index_file)
+        except Exception as e:
+            print(f"Error cleaning up cache files: {e}")
+
+    def _acquire_lock(self):
+        while True:
+            try:
+                with open(self.lock_file_path, 'x'):  # 파일이 존재하지 않을 때만 생성
+                    return
+            except FileExistsError:
+                time.sleep(0.1)
+
+    def _release_lock(self):
+        os.remove(self.lock_file_path)
+
 class MarketPriceCache:
     def __init__(self, db_manager, debug=False):
         self.db = db_manager
         self.debug = debug
-        self.cache_file_path = 'market_price_cache.pkl'
-        self.lock_file_path = 'market_price_cache.lock'
+
+        # Double Buffer 캐시 초기화
+        self.cache_manager = DoubleBufferCache('market_price_cache')
         
-        # 캐시 초기화
-        self.cache = {
+        # 초기 캐시 데이터 구조
+        self.cache_structure = {
             "dealer": {},
-            "support": {}
+            "support": {},
+            "bracelet_고대": {},
+            "bracelet_유물": {}
         }
-        self.last_update = None
         
-        # 파일에서 캐시 로드 시도
+        # 캐시 로드
         self._load_cache()
 
         self.EXCLUSIVE_OPTIONS = {
@@ -66,56 +188,22 @@ class MarketPriceCache:
     # Cache Management Methods
     # -----------------------------
     
-    def _acquire_lock(self):
-        """파일 락 획득"""
-        while True:
-            try:
-                with open(self.lock_file_path, 'x'):  # 파일이 존재하지 않을 때만 생성
-                    return
-            except FileExistsError:
-                time.sleep(0.1)
-
-    def _release_lock(self):
-        """파일 락 해제"""
-        try:
-            os.remove(self.lock_file_path)
-        except FileNotFoundError:
-            pass
-
     def _load_cache(self):
-        """파일에서 캐시 데이터 로드"""
-        try:
-            self._acquire_lock()
-            if os.path.exists(self.cache_file_path):
-                with open(self.cache_file_path, 'rb') as f:
-                    cache_data = pickle.load(f)
-                    self.cache = cache_data.get('cache', self.cache)
-                    self.last_update = cache_data.get('last_update', None)
-                    
-                    print(f"Cache loaded from file. Last update: {self.last_update}")
-                    print(f"Dealer cache entries: {len(self.cache['dealer'])}")
-                    print(f"Support cache entries: {len(self.cache['support'])}")
-        except Exception as e:
-            print(f"Error loading cache: {e}")
-        finally:
-            self._release_lock()
+        """캐시 데이터 로드"""
+        self.cache, self.last_update = self.cache_manager.get_active_cache()
+        if not self.cache:  # 캐시가 비어있으면 기본 구조로 초기화
+            self.cache = self.cache_structure.copy()
+            
+        if self.debug:
+            print(f"Cache loaded. Last update: {self.last_update}")
+            print(f"Dealer cache entries: {len(self.cache['dealer'])}")
+            print(f"Support cache entries: {len(self.cache['support'])}")
+            print(f"고대 팔찌 cache entries: {len(self.cache['bracelet_고대'])}")
+            print(f"유물 팔찌 cache entries: {len(self.cache['bracelet_유물'])}")
 
-    def _save_cache(self):
-        """캐시 데이터를 파일에 저장"""
-        try:
-            self._acquire_lock()
-            cache_data = {
-                'cache': self.cache,
-                'last_update': self.last_update
-            }
-            with open(self.cache_file_path, 'wb') as f:
-                pickle.dump(cache_data, f)
-                
-            print(f"Cache saved to file at {datetime.now()}")
-        except Exception as e:
-            print(f"Error saving cache: {e}")
-        finally:
-            self._release_lock()
+    def get_last_update_time(self) -> Optional[datetime]:
+        """캐시의 마지막 업데이트 시간 확인"""
+        return self.cache_manager.get_last_update_time()
 
     # -----------------------------
     # Public Interface Methods
@@ -123,18 +211,7 @@ class MarketPriceCache:
 
     def get_price_data(self, grade: str, part: str, level: int, 
                       options: Dict[str, List[Tuple[str, float]]]) -> Dict[str, Optional[Dict]]:
-        """가격 데이터 조회"""
-        current_time = datetime.now()
-        
-        # 캐시가 없거나 1시간 이상 지난 경우 업데이트
-        if (not self.last_update or 
-            current_time - self.last_update > timedelta(hours=1)):
-            print(f"\nUpdating cache because it's {'missing' if not self.last_update else 'old'}")
-            if self.last_update:
-                print(f"Last update: {self.last_update}")
-                print(f"Time since last update: {current_time - self.last_update}")
-            self.update_cache()
-            
+        """가격 데이터 조회"""            
         dealer_key, support_key = self.get_cache_key(grade, part, level, options)
         
         cache_data = {
@@ -164,13 +241,10 @@ class MarketPriceCache:
             print("\nUpdating price cache...")
             start_time = datetime.now()
             timestamp = start_time.strftime("%Y%m%d_%H%M%S")
-            log_filename = f'price_calculation_{timestamp}.log'
+            log_filename = f'price_log/price_calculation_{timestamp}.log'
 
             with redirect_stdout(log_filename):
-                new_cache = {
-                    "dealer": {},
-                    "support": {}
-                }
+                new_cache = self.cache_structure.copy()
 
                 with self.db.get_read_session() as session:
                     recent_time = datetime.now() - timedelta(hours=24)
@@ -245,18 +319,15 @@ class MarketPriceCache:
                     cache_key = f"bracelet_{grade}"
                     new_cache[cache_key] = self._calculate_bracelet_prices(grade)
 
+            # Double Buffer 캐시 업데이트
+            if self.cache_manager.update_cache(new_cache):
+                # 업데이트 성공 시 현재 인스턴스의 캐시도 업데이트
                 self.cache = new_cache
+                self.last_update = datetime.now()
+                print(f"Cache update completed in {(datetime.now() - start_time).total_seconds():.2f} seconds")
+            else:
+                print("Cache update failed")
                 
-            self.last_update = datetime.now()
-            
-            # 캐시 파일 저장
-            self._save_cache()
-
-            end_time = datetime.now()
-            print(f"Cache update completed in {(end_time - start_time).total_seconds():.2f} seconds")
-            print(f"Dealer cache entries: {len(new_cache['dealer'])}")
-            print(f"Support cache entries: {len(new_cache['support'])}")
-
         except Exception as e:
             print(f"Error updating price cache: {e}")
             if self.debug:
@@ -737,17 +808,6 @@ class MarketPriceCache:
 
     def get_bracelet_price(self, grade: str, item_data: Dict) -> Optional[int]:
         """팔찌 가격 조회"""
-        current_time = datetime.now()
-        
-        # 캐시가 없거나 1시간 이상 지난 경우 업데이트
-        if (not self.last_update or 
-            current_time - self.last_update > timedelta(hours=1)):
-            print(f"\nUpdating cache because it's {'missing' if not self.last_update else 'old'}")
-            if self.last_update:
-                print(f"Last update: {self.last_update}")
-                print(f"Time since last update: {current_time - self.last_update}")
-            self.update_cache()
-
         pattern_info = self._classify_bracelet_pattern(item_data)
         # print(f"찾아진 패턴 for item {item_data}: {pattern_info}")
         if not pattern_info:

@@ -10,17 +10,12 @@ from typing import List, Dict, Tuple, Any
 from market_price_cache import MarketPriceCache
 
 class PriceCollector(threading.Thread):
-    def __init__(self, db_manager):  # 기본 2시간 간격
+    def __init__(self, db_manager, tokens):  # 기본 2시간 간격
         super().__init__()
         self.daemon = True
         self.db = db_manager
         self.current_cycle_id = None  # 추가
-        self.url = "https://developer-lostark.game.onstove.com/auctions/items"
-        self.headers = {
-            'accept': 'application/json',
-            'authorization': f"bearer {os.getenv('API_TOKEN_LOWESTPRICE')}",
-            'content-Type': 'application/json'
-        }
+        self.token_manager = TokenManager(tokens)
 
         # 프리셋 생성기 초기화
         self.preset_generator = SearchPresetGenerator()
@@ -332,8 +327,7 @@ class PriceCollector(threading.Thread):
                             # 첫 페이지 요청
                             search_data = self.preset_generator.create_search_data_acc(
                                 preset, grade, part, page_no=1)
-                            response = do_search(
-                                self.url, self.headers, search_data, error_log=False)
+                            response = self.token_manager.do_search(search_data)
                             
                             # 첫 페이지 처리
                             processed_items = self.process_acc_response(response, grade, part)
@@ -355,12 +349,10 @@ class PriceCollector(threading.Thread):
 
                             # 추가 페이지 처리
                             for page in range(2, pages_to_fetch + 1):
-                                time.sleep(SEARCH_INTERVAL)  # API 요청 간격
                                 
                                 search_data = self.preset_generator.create_search_data_acc(
                                     preset, grade, part, page_no=page)
-                                response = do_search(
-                                    self.url, self.headers, search_data, error_log=False)
+                                response = self.token_manager.do_search(search_data)
                                 processed_items = self.process_acc_response(
                                     response, grade, part)
                                 
@@ -373,8 +365,6 @@ class PriceCollector(threading.Thread):
                             print(f"Error collecting {grade} {part}: {e}")
                             continue
 
-                        time.sleep(SEARCH_INTERVAL)  # 다음 프리셋 검색 전 대기
-
                 # 팔찌 (동일한 페이지네이션 로직 적용)
                 presets = self.preset_generator.generate_presets_bracelet(grade)
                 print(presets)
@@ -384,8 +374,7 @@ class PriceCollector(threading.Thread):
                         # 첫 페이지 요청
                         search_data = self.preset_generator.create_search_data_bracelet(
                             preset, grade, page_no=1)
-                        response = do_search(
-                            self.url, self.headers, search_data, error_log=False)
+                        response = self.token_manager.do_search(search_data)
                         
                         # 첫 페이지 처리
                         processed_items = self.process_bracelet_response(response, grade)
@@ -404,12 +393,10 @@ class PriceCollector(threading.Thread):
 
                         # 추가 페이지 처리
                         for page in range(2, pages_to_fetch + 1):
-                            time.sleep(SEARCH_INTERVAL)
                             
                             search_data = self.preset_generator.create_search_data_bracelet(
                                 preset, grade, page_no=page)
-                            response = do_search(
-                                self.url, self.headers, search_data, error_log=False)
+                            response = self.token_manager.do_search(search_data)
                             processed_items = self.process_bracelet_response(
                                 response, grade)
                             
@@ -421,8 +408,6 @@ class PriceCollector(threading.Thread):
                     except Exception as e:
                         print(f"Error collecting {grade} bracelet: {e}")
                         continue
-
-                    time.sleep(SEARCH_INTERVAL)
 
             print(f"Total collected items: {total_collected}")
             
@@ -838,7 +823,18 @@ if __name__ == "__main__":
     
     print("Starting price collector...")
     db_manager = init_database()  # DatabaseManager() 대신 init_database() 사용
-    collector = PriceCollector(db_manager)
+    tokens = [os.getenv('API_TOKEN_KDH_1'),
+              os.getenv('API_TOKEN_LHJ_1'),
+              os.getenv('API_TOKEN_LHJ_2'),
+              os.getenv('API_TOKEN_LHJ_3'),
+              os.getenv('API_TOKEN_LHJ_4'),
+              os.getenv('API_TOKEN_CBK_1'),
+              os.getenv('API_TOKEN_CBK_2'),
+              os.getenv('API_TOKEN_CBK_3'),
+              os.getenv('API_TOKEN_CBK_4'),
+              os.getenv('API_TOKEN_JCM_1'),
+            ]
+    collector = PriceCollector(db_manager, tokens)
     collector.start()
     
     try:

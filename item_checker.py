@@ -358,11 +358,13 @@ class ItemEvaluator:
             common_values = price_data.get('common_option_values', {})
             if opt_name in common_values and common_values[opt_name]:
                 try:
-                    # 가장 가까운 정해진 값 찾기
-                    closest_value = min(common_values[opt_name].keys(), 
-                                    key=lambda x: abs(float(x) - opt_value))
-                    additional_value = common_values[opt_name].get(closest_value, 0)
-                    estimated_price += additional_value
+                    # 정확히 일치하거나 더 작은 값들 중 최대값 찾기
+                    valid_values = [float(v) for v in common_values[opt_name].keys() 
+                                if float(v) <= opt_value]
+                    if valid_values:
+                        closest_value = max(valid_values)
+                        additional_value = common_values[opt_name][str(closest_value)]
+                        estimated_price += additional_value
                     if self.debug:
                         print(f"Added value for {opt_name} {opt_value}: +{additional_value:,}")
                 except ValueError:
@@ -405,10 +407,13 @@ class ItemEvaluator:
             common_values = price_data.get('common_option_values', {})
             if opt_name in common_values and common_values[opt_name]:
                 try:
-                    closest_value = min(common_values[opt_name].keys(), 
-                                    key=lambda x: abs(float(x) - opt_value))
-                    additional_value = common_values[opt_name].get(closest_value, 0)
-                    estimated_price += additional_value
+                    # 정확히 일치하거나 더 작은 값들 중 최대값 찾기
+                    valid_values = [float(v) for v in common_values[opt_name].keys() 
+                                if float(v) <= opt_value]
+                    if valid_values:
+                        closest_value = max(valid_values)
+                        additional_value = common_values[opt_name][str(closest_value)]
+                        estimated_price += additional_value
                     if self.debug:
                         print(f"Added value for {opt_name} {opt_value}: +{additional_value:,}")
                 except ValueError:

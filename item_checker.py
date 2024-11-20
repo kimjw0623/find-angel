@@ -9,11 +9,13 @@ from database import *
 from utils import *
 from market_price_cache import MarketPriceCache
 from sqlalchemy.orm import aliased
+from discord_webhook import DiscordWebhook
 
 class MarketScanner:
     def __init__(self, evaluator):
         self.evaluator = evaluator
         self.url = "https://developer-lostark.game.onstove.com/auctions/items"
+        self.webhook = os.getenv("WEBHOOK")
 
         # 3일짜리 토큰
         self.headers_3day = {
@@ -233,22 +235,27 @@ class MarketScanner:
                             if opt["OptionName"] not in ["깨달음", "도약"]])
         
         end_date = item["AuctionInfo"]["EndDate"]  # 원본 문자열 그대로 사용
+        return_str = ""
         
         if evaluation["type"] == "accessory":
-            print(f"{evaluation['grade']} {item['Name']} | "
+            return_str = (f"{evaluation['grade']} {item['Name']} | "
                 f"{evaluation['current_price']:,}골드 vs {evaluation['expected_price']:,}골드 "
                 f"({evaluation['price_ratio']*100:.1f}%) | "
                 f"품질 {evaluation['quality']} | {evaluation['level']}연마 | "
                 f"만료 {end_date} | "
                 f"{options_str} | "
                 f"거래 {item['AuctionInfo']['TradeAllowCount']}회")
+            print(return_str)
+            DiscordWebhook(url=self.webhook, content=return_str).execute()
         else:  # bracelet
-            print(f"{evaluation['grade']} {item['Name']} | "
+            return_str = (f"{evaluation['grade']} {item['Name']} | "
                 f"{evaluation['current_price']:,}골드 vs {evaluation['expected_price']:,}골드 "
                 f"({evaluation['price_ratio']*100:.1f}%) | "
                 f"고정 {evaluation['fixed_option_count']} 부여 {int(evaluation['extra_option_count'])} | "
                 f"만료 {end_date} | "
                 f"{options_str}")
+            print(return_str)
+            DiscordWebhook(url=self.webhook, content=return_str).execute()
 
 
 class ItemEvaluator:
@@ -665,7 +672,7 @@ class ItemEvaluator:
         # if level < 3 and expected_price > 40000 and price_ratio < 0.45:
         #     return True
         # return False
-        if current_price > 10000 or expected_price > 10000:
+        if price_ratio < 0.5 and expected_price > 10000:
             return True
         return False
 
@@ -674,7 +681,7 @@ class ItemEvaluator:
         # if expected_price > 50000 and price_ratio < 0.7:
         #     return True
         # return False
-        if current_price > 10000 or expected_price > 10000:
+        if price_ratio < 0.5 and expected_price > 10000:
             return True
         return False
 

@@ -438,14 +438,18 @@ class PriceCollector(threading.Thread):
     def run(self):
         """메인 스레드 실행"""
         def get_next_run_time():
-            """다음 실행 시간 계산 (다음 짝수 시간)"""
+            """Calculate the next run time (next even hour)"""
             now = datetime.now()
             current_hour = now.hour
-            next_hour = current_hour + (2 - current_hour % 2)  # 다음 짝수 시간
             
-            next_run = now.replace(hour=next_hour, minute=0, second=0, microsecond=0)
-            if next_run <= now:  # 이미 지난 시간이면 다음 주기로
-                next_run += timedelta(hours=2)
+            if current_hour >= 22:  # If current hour is 22 or 23
+                next_run = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)  # Next run is 0:00 the next day
+            else:
+                next_hour = current_hour + (2 - current_hour % 2)  # Next even hour
+                next_run = now.replace(hour=next_hour, minute=0, second=0, microsecond=0)
+                
+            if next_run <= now:  # If the next run time is already past
+                next_run += timedelta(hours=2)  # Move to the next even hour
             return next_run
 
         while True:

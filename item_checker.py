@@ -118,7 +118,7 @@ class MarketScanner:
                     # 즉시 평가 및 처리
                     evaluation = self.evaluator.evaluate_item(item)
                     if evaluation and evaluation["is_notable"]:
-                        send_discord_message(self.webhook, evaluation, item)
+                        send_discord_message(self.webhook, item, evaluation)
 
                 page_no += 1
                 time.sleep(0.5)  # API 호출 간격 조절

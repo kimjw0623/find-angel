@@ -328,7 +328,7 @@ class TokenManager:
         self.token_usage = {token: deque() for token in tokens}
         self.url = "https://developer-lostark.game.onstove.com/auctions/items"
 
-    def do_search(self, post_body: dict, url: str = None, timeout: int = 10, max_retries: int = 6, delay: int = 10) -> requests.Response:
+    def do_search(self, post_body: dict, url: str = None, timeout: int = 3, max_retries: int = 6, delay: int = 3) -> requests.Response:
         """여러 토큰을 사용하여 API 검색 수행"""
         current_token = self._get_available_token()
 
@@ -353,7 +353,7 @@ class TokenManager:
             except (requests.exceptions.ConnectionError, 
                    requests.exceptions.HTTPError, 
                    requests.exceptions.ReadTimeout) as e:
-                print(f"Request error {e}, waiting for {delay} seconds...")
+                print(f"시도 {attempt + 1}/{max_retries} 실패: {e}")
                 if attempt + 1 == max_retries:
                     raise
                 time.sleep(delay)

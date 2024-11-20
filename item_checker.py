@@ -374,7 +374,7 @@ class ItemEvaluator:
 
         # 품질 보정 (항상 적용)
         quality_diff = reference_options["base_info"]["quality"] - 67  # 67이 기준 품질
-        quality_adjustment = quality_diff * price_data['quality_coefficient']
+        quality_adjustment = quality_diff * price_data['quality_coefficient'] * 0.5 # 보수적으로 잡기 위해 0.5 넣음
         estimated_price += quality_adjustment
 
         # 거래 횟수 보정 (항상 적용)
@@ -423,7 +423,7 @@ class ItemEvaluator:
 
         # 품질 보정 (항상 적용)
         quality_diff = reference_options["base_info"]["quality"] - 67
-        quality_adjustment = quality_diff * price_data['quality_coefficient']
+        quality_adjustment = quality_diff * price_data['quality_coefficient'] * 0.5 # 보수적으로 잡기 위해 0.5 넣음
         estimated_price += quality_adjustment
 
         # 거래 횟수 보정 (항상 적용)

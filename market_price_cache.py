@@ -510,7 +510,7 @@ class MarketPriceCache:
                         matching_prices = [item.price for item in matching_items]
                         sorted_matching_prices = sorted(matching_prices)
                         # min_price = sorted_matching_prices[1] if len(sorted_matching_prices) > 1 else sorted_matching_prices[0]
-                        min_price = sorted_matching_prices[1] if len(sorted_matching_prices) > 3 else base_price # 4개 이상 있어야 계산
+                        min_price = sorted_matching_prices[1] if len(sorted_matching_prices) > 4 else base_price # 5개 이상 있어야 계산
                         additional_value = min_price - base_price
                         
                         if additional_value > 0:

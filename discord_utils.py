@@ -82,7 +82,7 @@ def bracelet_option_color(opt, grade):
             return "\\u001b[2;33m"
         elif value > 80:
             return "\\u001b[2;35m"
-        elif value > 60:
+        elif value > 62: # 62 was green
             return "\\u001b[2;34m"
         else: # 40 초과
             return "\\u001b[2;32m"
@@ -113,8 +113,8 @@ def quality_color(quality):
         return "\\u001b[2;32m"
 
 RESET = "\\u001b[0m"
-def formatted_discord_message(url, item, evaluation):
-    toSend  = "```ansi\\n\\u001b[2;31m\\u001b[2;40m" if evaluation['grade'] == "유물" else "\\u001b[2;37m\\u001b[2;40m"
+def formatted_discord_message(url, item, evaluation, debug=False):
+    toSend  = "```ansi\\n\\u001b[2;31m\\u001b[2;40m" if evaluation['grade'] == "유물" else "```ansi\\n\\u001b[2;37m\\u001b[2;40m"
     toSend += f"{evaluation['grade']} {item['Name']}{RESET}\\n"
     
     if evaluation["type"] == "accessory": # 장신구
@@ -135,5 +135,6 @@ def formatted_discord_message(url, item, evaluation):
             toSend += f"{color}{opt['OptionName']} {int(opt['Value'])}{RESET} "
     
     toSend += f"\\n만료 {item['AuctionInfo']['EndDate']}\\n```"
-
+    if debug:
+        print(toSend)
     fire_webhook(url, toSend)

@@ -1,30 +1,25 @@
-from discord_webhook import DiscordWebhook
 import requests
 from requests.structures import CaseInsensitiveDict
 import utils
 
-def fire_webhook(message):
-    url = "https://discord.com/api/webhooks/1308811214674985011/DhmX8Stl3z8j22YBEwcErTY-w1r6l_zahCaBUMhIiXmpomfBFJhibEvh5sAJvZoS48rH?"
-
+def fire_webhook(url, message):
     headers = CaseInsensitiveDict()
     headers["Content-Type"] = "application/json"
 
-    data = f"""{{"content":"{message}"}}"""
+    result = requests.post(url, headers=headers, data=f"""{{"content":"{message}"}}""")
+    
+    return result.status_code
 
-    resp = requests.post(url, headers=headers, data=data)
-
-    print(resp.status_code)
-    print(resp.text)
-
-def send_discord_message(*args, **kargs):
-    legacy_webhook(*args, **kargs)
+def send_discord_message(url, item, evaluation, url2=None):
+    legacy_discord_message(url, item, evaluation)
     try:
-        fancy_webhook(*args, **kargs)
+        if url2:
+            formatted_discord_message(url2, item, evaluation)
     except:
         pass
 
-
-def legacy_webhook(webhook, item, evaluation):
+    
+def legacy_discord_message(url, item, evaluation):
     options_str = ' '.join([f"{opt['OptionName']}{opt['Value']}" for opt in item["Options"] 
                         if opt["OptionName"] not in ["깨달음", "도약"]])
     
@@ -48,8 +43,7 @@ def legacy_webhook(webhook, item, evaluation):
             f"{options_str}")
 
     print(return_str)
-    fire_webhook(return_str)
-    #DiscordWebhook(url=webhook, content=return_str).execute()
+    fire_webhook(url, return_str)
 
 def accessory_option(opt):
     colorList = ["\\u001b[2;30m", "\\u001b[2;34m", "\\u001b[2;35m", "\\u001b[2;33m"]
@@ -119,15 +113,15 @@ def quality_color(quality):
         return "\\u001b[2;32m"
 
 RESET = "\\u001b[0m"
-def fancy_webhook(webhook, item, evaluation):
-    toSend  = "\\u001b[2;31m\\u001b[2;40m" if evaluation['grade'] == "유물" else "\\u001b[2;37m\\u001b[2;40m"
+def formatted_discord_message(url, item, evaluation):
+    toSend  = "```ansi\\n\\u001b[2;31m\\u001b[2;40m" if evaluation['grade'] == "유물" else "\\u001b[2;37m\\u001b[2;40m"
     toSend += f"{evaluation['grade']} {item['Name']}{RESET}\\n"
     
     if evaluation["type"] == "accessory": # 장신구
         toSend += f"품질 {quality_color(evaluation['quality'])}{evaluation['quality']}{RESET} 거래 {item['AuctionInfo']['TradeAllowCount']}회\\n"
         toSend += f"{evaluation['current_price']:,}골드 vs {evaluation['expected_price']:,}골드 ({evaluation['price_ratio']*100:.1f}%)\\n"
         for opt in item["Options"]:
-            if opt["OptionName"] != "깨달음":
+            if opt["OptionName"] == "깨달음":
                 continue
             color, scale = accessory_option(opt)
             toSend += f"{color}{opt['OptionName']} {scale}{RESET} "
@@ -135,9 +129,11 @@ def fancy_webhook(webhook, item, evaluation):
     else:  # 팔찌
         toSend += f"{evaluation['current_price']:,}골드 vs {evaluation['expected_price']:,}골드 ({evaluation['price_ratio']*100:.1f}%)\\n"
         for opt in item["Options"]:
-            if opt["OptionName"] != "도약":
+            if opt["OptionName"] == "도약":
                 continue
             color = bracelet_option_color(opt, evaluation['grade'])
             toSend += f"{color}{opt['OptionName']} {int(opt['Value'])}{RESET} "
     
-    toSend += f"\\n만료 {item['AuctionInfo']['EndDate']}"
+    toSend += f"\\n만료 {item['AuctionInfo']['EndDate']}\\n```"
+
+    fire_webhook(url, toSend)

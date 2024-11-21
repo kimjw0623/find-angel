@@ -15,7 +15,8 @@ class MarketScanner:
     def __init__(self, evaluator, tokens):
         self.evaluator = evaluator
         self.token_manager = TokenManager(tokens)
-        self.webhook = os.getenv("WEBHOOK")
+        self.webhook1 = os.getenv("WEBHOOK1")
+        self.webhook2 = os.getenv("WEBHOOK2")
 
         # 마지막 체크 시간 초기화
         self.last_expireDate_3day = None
@@ -105,7 +106,7 @@ class MarketScanner:
                     # 즉시 평가 및 처리
                     evaluation = self.evaluator.evaluate_item(item)
                     if evaluation and evaluation["is_notable"]:
-                        send_discord_message(self.webhook, item, evaluation)
+                        send_discord_message(self.webhook1, item, evaluation, url2=self.webhook2)
 
                 page_no += 1
 

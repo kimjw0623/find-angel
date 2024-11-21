@@ -1,5 +1,20 @@
 from discord_webhook import DiscordWebhook
+import requests
+from requests.structures import CaseInsensitiveDict
 import utils
+
+def fire_webhook(message):
+    url = "https://discord.com/api/webhooks/1308811214674985011/DhmX8Stl3z8j22YBEwcErTY-w1r6l_zahCaBUMhIiXmpomfBFJhibEvh5sAJvZoS48rH?"
+
+    headers = CaseInsensitiveDict()
+    headers["Content-Type"] = "application/json"
+
+    data = f"""{{"content":"{message}"}}"""
+
+    resp = requests.post(url, headers=headers, data=data)
+
+    print(resp.status_code)
+    print(resp.text)
 
 def send_discord_message(*args, **kargs):
     legacy_webhook(*args, **kargs)
@@ -33,10 +48,11 @@ def legacy_webhook(webhook, item, evaluation):
             f"{options_str}")
 
     print(return_str)
-    DiscordWebhook(url=webhook, content=return_str).execute()
+    fire_webhook(return_str)
+    #DiscordWebhook(url=webhook, content=return_str).execute()
 
 def accessory_option(opt):
-    colorList = ["[2;30m", "[2;34m", "[2;35m", "[2;33m"]
+    colorList = ["\\u001b[2;30m", "\\u001b[2;34m", "\\u001b[2;35m", "\\u001b[2;33m"]
     scaleList = " 하중상"
     try:
         scale = utils.number_to_scale[opt["OptionName"]][opt["Value"]]
@@ -51,65 +67,65 @@ def bracelet_option_color(opt, grade):
         if grade == "고대":
             value -= 1
         if value == 2:
-            return "[2;33m"
+            return "\\u001b[2;33m"
         else:
-            return "[2;34m"
+            return "\\u001b[2;34m"
 
     elif name == "공격 및 이동 속도 증가": # 3~5 / 4~6
         if grade == "고대":
             value -= 1
         if value == 5:
-            return "[2;33m"
+            return "\\u001b[2;33m"
         elif value == 4:
-            return "[2;35m"
+            return "\\u001b[2;35m"
         else:
-            return "[2;34m"
+            return "\\u001b[2;34m"
 
     elif name in ["특화", "신속", "치명"]: # 61~100 / 81~120
         if grade == "고대":
             value -= 20
         if value == 100:
-            return "[2;33m"
+            return "\\u001b[2;33m"
         elif value > 80:
-            return "[2;35m"
+            return "\\u001b[2;35m"
         elif value > 60:
-            return "[2;34m"
+            return "\\u001b[2;34m"
         else: # 40 초과
-            return "[2;32m"
+            return "\\u001b[2;32m"
 
     elif name in ["힘", "민첩", "지능"]: # 6400~12800 / 9600~16000
         if grade == "고대":
             value -= 3200
         if value == 12800:
-            return "[2;33m"
+            return "\\u001b[2;33m"
         elif value > 10666:
-            return "[2;35m"
+            return "\\u001b[2;35m"
         elif value >= 8533:
-            return "[2;34m"
+            return "\\u001b[2;34m"
         else: # 6400 이상
-            return "[2;32m"
+            return "\\u001b[2;32m"
     
     else: # 제/인/숙/체력/기타 특옵
-        return "[2;30m"
+        return "\\u001b[2;30m"
 
 def quality_color(quality):
     if quality == 100:
-        return "[2;33m"
+        return "\\u001b[2;33m"
     elif quality >= 90:
-        return "[2;35m"
+        return "\\u001b[2;35m"
     elif quality >= 70:
-        return "[2;34m"
+        return "\\u001b[2;34m"
     else: # 40 초과
-        return "[2;32m"
+        return "\\u001b[2;32m"
 
-RESET = "[0m"
+RESET = "\\u001b[0m"
 def fancy_webhook(webhook, item, evaluation):
-    toSend  = "[2;31m[2;40m" if evaluation['grade'] == "유물" else "[2;37m[2;40m"
-    toSend += f"{evaluation['grade']} {item['Name']}{RESET}\n"
+    toSend  = "\\u001b[2;31m\\u001b[2;40m" if evaluation['grade'] == "유물" else "\\u001b[2;37m\\u001b[2;40m"
+    toSend += f"{evaluation['grade']} {item['Name']}{RESET}\\n"
     
     if evaluation["type"] == "accessory": # 장신구
-        toSend += f"품질 {quality_color(evaluation['quality'])}{evaluation['quality']}{RESET} 거래 {item['AuctionInfo']['TradeAllowCount']}회\n"
-        toSend += f"{evaluation['current_price']:,}골드 vs {evaluation['expected_price']:,}골드 ({evaluation['price_ratio']*100:.1f}%)\n"
+        toSend += f"품질 {quality_color(evaluation['quality'])}{evaluation['quality']}{RESET} 거래 {item['AuctionInfo']['TradeAllowCount']}회\\n"
+        toSend += f"{evaluation['current_price']:,}골드 vs {evaluation['expected_price']:,}골드 ({evaluation['price_ratio']*100:.1f}%)\\n"
         for opt in item["Options"]:
             if opt["OptionName"] != "깨달음":
                 continue
@@ -117,11 +133,11 @@ def fancy_webhook(webhook, item, evaluation):
             toSend += f"{color}{opt['OptionName']} {scale}{RESET} "
 
     else:  # 팔찌
-        toSend += f"{evaluation['current_price']:,}골드 vs {evaluation['expected_price']:,}골드 ({evaluation['price_ratio']*100:.1f}%)\n"
+        toSend += f"{evaluation['current_price']:,}골드 vs {evaluation['expected_price']:,}골드 ({evaluation['price_ratio']*100:.1f}%)\\n"
         for opt in item["Options"]:
             if opt["OptionName"] != "도약":
                 continue
             color = bracelet_option_color(opt, evaluation['grade'])
             toSend += f"{color}{opt['OptionName']} {int(opt['Value'])}{RESET} "
     
-    toSend += f"\n만료 {item['AuctionInfo']['EndDate']}"
+    toSend += f"\\n만료 {item['AuctionInfo']['EndDate']}"

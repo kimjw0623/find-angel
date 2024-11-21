@@ -9,13 +9,14 @@ from database import *
 from utils import *
 from market_price_cache import MarketPriceCache
 from sqlalchemy.orm import aliased
-from discord_webhook import DiscordWebhook
+from discord_utils import send_discord_message
 
 class MarketScanner:
     def __init__(self, evaluator, tokens):
         self.evaluator = evaluator
         self.token_manager = TokenManager(tokens)
-        self.webhook = os.getenv("WEBHOOK")
+        self.webhook1 = os.getenv("WEBHOOK1")
+        self.webhook2 = os.getenv("WEBHOOK2")
 
         # 마지막 체크 시간 초기화
         self.last_expireDate_3day = None
@@ -105,7 +106,7 @@ class MarketScanner:
                     # 즉시 평가 및 처리
                     evaluation = self.evaluator.evaluate_item(item)
                     if evaluation and evaluation["is_notable"]:
-                        self._handle_notable_item(item, evaluation)
+                        send_discord_message(self.webhook1, item, evaluation, url2=self.webhook2)
 
                 page_no += 1
 
@@ -203,35 +204,6 @@ class MarketScanner:
 
         # Case 3: 현재 페이지가 적절함
         return page_no
-
-    def _handle_notable_item(self, item: Dict, evaluation: Dict):
-        """주목할 만한 매물 처리"""
-        options_str = ' '.join([f"{opt['OptionName']}{opt['Value']}" for opt in item["Options"] 
-                            if opt["OptionName"] not in ["깨달음", "도약"]])
-        
-        end_date = item["AuctionInfo"]["EndDate"]  # 원본 문자열 그대로 사용
-        return_str = ""
-        
-        if evaluation["type"] == "accessory":
-            return_str = (f"{evaluation['grade']} {item['Name']} | "
-                f"{evaluation['current_price']:,}골드 vs {evaluation['expected_price']:,}골드 "
-                f"({evaluation['price_ratio']*100:.1f}%) | "
-                f"품질 {evaluation['quality']} | {evaluation['level']}연마 | "
-                f"만료 {end_date} | "
-                f"{options_str} | "
-                f"거래 {item['AuctionInfo']['TradeAllowCount']}회")
-            print(return_str)
-            DiscordWebhook(url=self.webhook, content=return_str).execute()
-        else:  # bracelet
-            return_str = (f"{evaluation['grade']} {item['Name']} | "
-                f"{evaluation['current_price']:,}골드 vs {evaluation['expected_price']:,}골드 "
-                f"({evaluation['price_ratio']*100:.1f}%) | "
-                f"고정 {evaluation['fixed_option_count']} 부여 {int(evaluation['extra_option_count'])} | "
-                f"만료 {end_date} | "
-                f"{options_str}")
-            print(return_str)
-            DiscordWebhook(url=self.webhook, content=return_str).execute()
-
 
 class ItemEvaluator:
     def __init__(self, price_cache, debug=False):

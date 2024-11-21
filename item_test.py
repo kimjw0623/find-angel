@@ -88,7 +88,7 @@ def parse_market_item(line: str) -> dict:
             "AuctionInfo": {
                 "BuyPrice": price,
                 "TradeAllowCount": trade_count,
-                "EndDate": parts[3].split()[-1]  # 만료 시간 추가
+                "EndDate": parts[4].split()[-1]  # 만료 시간 추가
             },
             "Options": options
         }

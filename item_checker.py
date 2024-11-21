@@ -12,24 +12,10 @@ from sqlalchemy.orm import aliased
 from discord_utils import send_discord_message
 
 class MarketScanner:
-    def __init__(self, evaluator):
+    def __init__(self, evaluator, tokens):
         self.evaluator = evaluator
-        self.url = "https://developer-lostark.game.onstove.com/auctions/items"
+        self.token_manager = TokenManager(tokens)
         self.webhook = os.getenv("WEBHOOK")
-
-        # 3일짜리 토큰
-        self.headers_3day = {
-            "accept": "application/json",
-            "authorization": f"bearer {os.getenv('API_TOKEN_HONEYITEM_3DAY')}",
-            "content-Type": "application/json",
-        }
-
-        # 1일짜리 토큰
-        self.headers_1day = {
-            "accept": "application/json",
-            "authorization": f"bearer {os.getenv('API_TOKEN_HONEYITEM_1DAY')}",
-            "content-Type": "application/json",
-        }
 
         # 마지막 체크 시간 초기화
         self.last_expireDate_3day = None
@@ -40,13 +26,13 @@ class MarketScanner:
         """시장 스캔 실행"""
         try:
             # 3일 만료 매물 스캔
-            self._scan_items(self.headers_3day, days=3)
+            self._scan_items(days=3)
             # 1일 만료 매물 스캔
-            self._scan_items(self.headers_1day, days=1)
+            self._scan_items(days=1)
         except Exception as e:
             print(f"Error in market scan: {e}")
 
-    def _scan_items(self, headers: Dict, days: int):
+    def _scan_items(self, days: int):
         """매물 스캔 및 실시간 평가"""
         current_time = datetime.now()
         # 매물 카운트
@@ -65,22 +51,22 @@ class MarketScanner:
             if not self.last_expireDate_1day:
                 self.last_expireDate_1day = current_expireDate - timedelta(minutes=1)
             if not self.last_page_index_1day:
-                self.last_page_index_1day = 740  # 초기 추정치
+                self.last_page_index_1day = 747  # 초기 추정치
 
             # 적절한 시작 페이지 찾기
             page_no = self._find_starting_page(
                 self.last_page_index_1day, current_expireDate
             )
             last_expireDate = self.last_expireDate_1day
-            # print(f"1일 검색 시작, expire cut {self.last_expireDate_1day}")
+            # print(f"1일 검색 시작, 현재 시간 {current_time}, expire cut {self.last_expireDate_1day}, starts at page {page_no}")
 
         # 이번 검색 사이클의 첫 매물 시간을 저장할 변수
         next_expire_date = None
+        next_last_page_index_1day = None
         
         while True:
             try:
-                search_data = self._create_search_data(page_no)
-                response = do_search(self.url, headers, search_data)
+                response = self.token_manager.do_search(self._create_search_data(page_no))
                 data = response.json()
 
                 if not data["Items"]:
@@ -88,10 +74,7 @@ class MarketScanner:
                 
                 # 각 아이템 실시간 평가
                 for item in data["Items"]:                  
-                    end_time = datetime.strptime(
-                        item["AuctionInfo"]["EndDate"].split(".")[0],
-                        "%Y-%m-%dT%H:%M:%S",
-                    )
+                    end_time = datetime.fromisoformat(item["AuctionInfo"]["EndDate"])
                     
                     # 1일 매물인 경우 current_expireDate보다 작은지 추가 확인
                     if days == 1 and end_time >= current_expireDate:
@@ -100,12 +83,16 @@ class MarketScanner:
                     # 첫 매물의 시간 저장 (아직 저장된 적 없는 경우에만)
                     if next_expire_date is None:
                         next_expire_date = end_time
-
-                    # 이전에 체크한 시간보다 이후에 등록된 매물만 확인
+                    if days == 1 and next_last_page_index_1day is None:
+                        next_last_page_index_1day = page_no
+                    
+                    # 이전에 체크한 시간보다 이후에 등록된 매물만 확인. 즉 여기 들어오면 해당사이클의 끝
                     if end_time <= last_expireDate:
                         # 1일 매물인 경우 마지막 페이지 인덱스 업데이트
                         if days == 1:
-                            self.last_page_index_1day = page_no
+                            self.last_page_index_1day = next_last_page_index_1day
+                             # 왜인지 모르겠는데 짧은 시간 안에 같은 페이지 로드하면 그냥 같은 결과 뱉는 듯. 웹 API 업데이트가 느린 듯 함.
+                            # self.last_page_index_1day = next_last_page_index_1day - 2
                         # 마지막 확인 시간 업데이트 (첫 번째 매물 시간으로)
                         if days == 3:
                             self.last_expireDate_3day = next_expire_date
@@ -121,7 +108,6 @@ class MarketScanner:
                         send_discord_message(self.webhook, item, evaluation)
 
                 page_no += 1
-                time.sleep(0.5)  # API 호출 간격 조절
 
             except Exception as e:
                 print(f"Error scanning page {page_no}: {e}")
@@ -154,40 +140,31 @@ class MarketScanner:
         self, last_page_index: int, current_expireDate: datetime
     ) -> int:
         """적절한 시작 페이지 찾기"""
-        pageNo = last_page_index
-        response = do_search(
-            self.url, self.headers_1day, self._create_search_data(pageNo)
-        )
+        page_no = last_page_index
+        response = self.token_manager.do_search(self._create_search_data(page_no))
         data = response.json()
 
         if not data["Items"]:
-            return pageNo
+            return page_no
 
         first_item = data["Items"][0]
         last_item = data["Items"][-1]
 
-        first_item_end_time = datetime.strptime(
-            first_item["AuctionInfo"]["EndDate"].split(".")[0], "%Y-%m-%dT%H:%M:%S"
-        )
-        last_item_end_time = datetime.strptime(
-            last_item["AuctionInfo"]["EndDate"].split(".")[0], "%Y-%m-%dT%H:%M:%S"
-        )
-
-        # Case 1: 페이지가 너무 이름 (pageNo가 커져야 함)
-        page_step = 3
+        first_item_end_time = datetime.fromisoformat(first_item["AuctionInfo"]["EndDate"])
+        last_item_end_time = datetime.fromisoformat(last_item["AuctionInfo"]["EndDate"])
+        # Case 1: 페이지가 너무 이름 (page_no가 커져야 함)
+        page_step = 1
         if (
             first_item_end_time > current_expireDate
             and last_item_end_time > current_expireDate
         ):
             while True:
-                pageNo += page_step
-                response = do_search(
-                    self.url, self.headers_1day, self._create_search_data(pageNo)
-                )
+                page_no += page_step
+                response = self.token_manager.do_search(self._create_search_data(page_no))
                 data = response.json()
 
                 if not data["Items"]:
-                    return max(1, pageNo - page_step)
+                    return max(1, page_no - page_step)
 
                 last_item = data["Items"][-1]
                 end_time = datetime.strptime(
@@ -196,22 +173,20 @@ class MarketScanner:
                 )
 
                 if end_time < current_expireDate:
-                    return max(1, pageNo - page_step)
+                    return max(1, page_no - page_step)
 
-        # Case 2: 페이지가 너무 늦음 (pageNo가 작아져야 함)
+        # Case 2: 페이지가 너무 늦음 (page_no가 작아져야 함)
         elif (
             first_item_end_time < current_expireDate
             and last_item_end_time < current_expireDate
         ):
-            pageNo = max(1, pageNo - page_step)
-            while pageNo > 0:
-                response = do_search(
-                    self.url, self.headers_1day, self._create_search_data(pageNo)
-                )
+            page_no = max(1, page_no - page_step)
+            while page_no > 0:
+                response = self.token_manager.do_search(self._create_search_data(page_no))
                 data = response.json()
 
                 if not data["Items"]:
-                    return pageNo + page_step
+                    return page_no + page_step
 
                 last_item = data["Items"][-1]
                 end_time = datetime.strptime(
@@ -220,14 +195,14 @@ class MarketScanner:
                 )
 
                 if end_time > current_expireDate:
-                    return pageNo
+                    return page_no
 
-                pageNo -= page_step
+                page_no -= page_step
 
             return 1
 
         # Case 3: 현재 페이지가 적절함
-        return pageNo
+        return page_no
 
 class ItemEvaluator:
     def __init__(self, price_cache, debug=False):
@@ -354,11 +329,13 @@ class ItemEvaluator:
             common_values = price_data.get('common_option_values', {})
             if opt_name in common_values and common_values[opt_name]:
                 try:
-                    # 가장 가까운 정해진 값 찾기
-                    closest_value = min(common_values[opt_name].keys(), 
-                                    key=lambda x: abs(float(x) - opt_value))
-                    additional_value = common_values[opt_name].get(closest_value, 0)
-                    estimated_price += additional_value
+                    # 정확히 일치하거나 더 작은 값들 중 최대값 찾기
+                    valid_values = [float(v) for v in common_values[opt_name].keys() 
+                                if float(v) <= opt_value]
+                    if valid_values:
+                        closest_value = max(valid_values)
+                        additional_value = common_values[opt_name][str(closest_value)]
+                        estimated_price += additional_value
                     if self.debug:
                         print(f"Added value for {opt_name} {opt_value}: +{additional_value:,}")
                 except ValueError:
@@ -368,7 +345,7 @@ class ItemEvaluator:
 
         # 품질 보정 (항상 적용)
         quality_diff = reference_options["base_info"]["quality"] - 67  # 67이 기준 품질
-        quality_adjustment = quality_diff * price_data['quality_coefficient']
+        quality_adjustment = quality_diff * price_data['quality_coefficient'] * 0.5 # 보수적으로 잡기 위해 0.5 넣음
         estimated_price += quality_adjustment
 
         # 거래 횟수 보정 (항상 적용)
@@ -401,10 +378,13 @@ class ItemEvaluator:
             common_values = price_data.get('common_option_values', {})
             if opt_name in common_values and common_values[opt_name]:
                 try:
-                    closest_value = min(common_values[opt_name].keys(), 
-                                    key=lambda x: abs(float(x) - opt_value))
-                    additional_value = common_values[opt_name].get(closest_value, 0)
-                    estimated_price += additional_value
+                    # 정확히 일치하거나 더 작은 값들 중 최대값 찾기
+                    valid_values = [float(v) for v in common_values[opt_name].keys() 
+                                if float(v) <= opt_value]
+                    if valid_values:
+                        closest_value = max(valid_values)
+                        additional_value = common_values[opt_name][str(closest_value)]
+                        estimated_price += additional_value
                     if self.debug:
                         print(f"Added value for {opt_name} {opt_value}: +{additional_value:,}")
                 except ValueError:
@@ -414,7 +394,7 @@ class ItemEvaluator:
 
         # 품질 보정 (항상 적용)
         quality_diff = reference_options["base_info"]["quality"] - 67
-        quality_adjustment = quality_diff * price_data['quality_coefficient']
+        quality_adjustment = quality_diff * price_data['quality_coefficient'] * 0.5 # 보수적으로 잡기 위해 0.5 넣음
         estimated_price += quality_adjustment
 
         # 거래 횟수 보정 (항상 적용)
@@ -657,10 +637,10 @@ class ItemEvaluator:
         return False
 
 class MarketMonitor:
-    def __init__(self, db_manager, debug=False):
+    def __init__(self, db_manager, tokens, debug=False):
         price_cache = MarketPriceCache(db_manager, debug=debug)
         self.evaluator = ItemEvaluator(price_cache, debug=debug)
-        self.scanner = MarketScanner(self.evaluator)
+        self.scanner = MarketScanner(self.evaluator, tokens=tokens)
 
     def run(self):
         """모니터링 실행"""
@@ -669,7 +649,7 @@ class MarketMonitor:
         while True:
             try:
                 self.scanner.scan_market()
-                time.sleep(2)  # 다음 스캔까지 대기
+                time.sleep(1)
             except KeyboardInterrupt:
                 print("\nStopping market monitoring...")
                 break
@@ -679,7 +659,17 @@ class MarketMonitor:
 
 def main():
     db_manager = init_database()  # DatabaseManager() 대신 init_database() 사용
-    monitor = MarketMonitor(db_manager, debug=False)
+    tokens = [os.getenv('API_TOKEN_CBG_1'),
+              os.getenv('API_TOKEN_CBG_2'),
+              os.getenv('API_TOKEN_CBG_3'),
+              os.getenv('API_TOKEN_LJD_1'),
+              os.getenv('API_TOKEN_LJD_2'),
+              os.getenv('API_TOKEN_LJD_3'),
+              os.getenv('API_TOKEN_LJD_4'),
+              os.getenv('API_TOKEN_KJW_1'),
+              os.getenv('API_TOKEN_KJW_2')
+            ]
+    monitor = MarketMonitor(db_manager, tokens=tokens, debug=False)
     monitor.run()
 
 if __name__ == "__main__":  

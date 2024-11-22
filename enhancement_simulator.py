@@ -127,6 +127,30 @@ class EnhancementSimulator:
 
         return results
 
+    def simulate_enhancement_with_preset(self, 
+                                    acc_type: AccessoryType,
+                                    grade: Grade,
+                                    preset_options: List[Tuple[AccessoryOption, EnhancementCost]],
+                                    remaining_count: int) -> List[Tuple[AccessoryOption, EnhancementCost]]:
+        """프리셋 옵션으로 시작하는 연마 시뮬레이션"""
+        if remaining_count <= 0:
+            return []
+
+        results = []
+        current_options = [opt for opt, _ in preset_options]
+
+        for i in range(remaining_count):
+            # 연마 시도
+            new_option = self.enhance_once(acc_type, current_options)
+            current_options.append(new_option)
+            
+            # 비용 계산 - 프리셋 이후부터의 비용만 계산
+            cost = self.ENHANCEMENT_COSTS[grade][len(preset_options) + i]
+            
+            results.append((new_option, cost))
+
+        return results
+
     def run_simulation(self, 
                       acc_type: AccessoryType,
                       grade: Grade,
@@ -138,3 +162,80 @@ class EnhancementSimulator:
             trial_result = self.simulate_enhancement(acc_type, grade, enhancement_count)
             results.append(trial_result)
         return results
+
+def test_enhancement_simulator():
+    simulator = EnhancementSimulator()
+
+    def print_options(options):
+        """옵션 출력 헬퍼 함수"""
+        for option, cost in options:
+            print(f"옵션: {option.name} ({option.grade.value}), "
+                  f"비용: {cost.gold} 골드, {cost.fragments} 조각")
+        print()
+
+    # 기본 연마 테스트
+    print("\n=== 기본 연마 테스트 ===")
+    print("고대 목걸이 3연마 시도:")
+    result = simulator.simulate_enhancement(
+        acc_type=AccessoryType.NECKLACE,
+        grade=Grade.ANCIENT,
+        enhancement_count=3
+    )
+    print_options(result)
+
+    # 프리셋 연마 테스트
+    print("\n=== 프리셋 연마 테스트 ===")
+    # 추피 상옵으로 시작하는 테스트
+    preset_options = [(AccessoryOption("추피", OptionGrade.HIGH), 
+                      EnhancementCost(0, 0))]
+    print("고대 목걸이 프리셋(추피 상옵) + 2연마 시도:")
+    result = simulator.simulate_enhancement_with_preset(
+        acc_type=AccessoryType.NECKLACE,
+        grade=Grade.ANCIENT,
+        preset_options=preset_options,
+        remaining_count=2
+    )
+    print("프리셋 옵션:")
+    print_options(preset_options)
+    print("추가된 옵션:")
+    print_options(result)
+
+    # 여러 번의 시도 결과 확인
+    print("\n=== 여러 번의 시도 결과 ===")
+    print("고대 목걸이 10번 시도 결과:")
+    for i in range(10):
+        print(f"\n시도 {i+1}:")
+        result = simulator.simulate_enhancement(
+            acc_type=AccessoryType.NECKLACE,
+            grade=Grade.ANCIENT,
+            enhancement_count=3
+        )
+        print_options(result)
+
+    # 옵션 출현 빈도 테스트
+    print("\n=== 옵션 출현 빈도 테스트 (1000회) ===")
+    option_counts = {}
+    grade_counts = {
+        OptionGrade.LOW: 0,
+        OptionGrade.MID: 0,
+        OptionGrade.HIGH: 0
+    }
+
+    for _ in range(1000):
+        result = simulator.enhance_once(
+            acc_type=AccessoryType.NECKLACE,
+            current_options=[]
+        )
+        option_counts[result.name] = option_counts.get(result.name, 0) + 1
+        grade_counts[result.grade] += 1
+
+    print("\n옵션별 출현 횟수:")
+    for option, count in sorted(option_counts.items()):
+        print(f"{option}: {count}회 ({count/1000*100:.1f}%)")
+
+    print("\n등급별 출현 횟수:")
+    for grade, count in grade_counts.items():
+        print(f"{grade.value}: {count}회 ({count/1000*100:.1f}%)")
+
+if __name__ == "__main__":
+    test_enhancement_simulator()

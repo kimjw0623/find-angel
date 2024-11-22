@@ -335,10 +335,10 @@ class ItemEvaluator:
                                 if float(v) <= opt_value]
                     if valid_values:
                         closest_value = max(valid_values)
-                        additional_value = common_values[opt_name][str(closest_value)]
+                        additional_value = common_values[opt_name][closest_value]
                         estimated_price += additional_value
-                    if self.debug:
-                        print(f"Added value for {opt_name} {opt_value}: +{additional_value:,}")
+                        if self.debug:
+                            print(f"Added value for {opt_name} {opt_value}: +{additional_value:,}")
                 except ValueError:
                     if self.debug:
                         print(f"No cached values found for {opt_name} {opt_value}")
@@ -384,10 +384,10 @@ class ItemEvaluator:
                                 if float(v) <= opt_value]
                     if valid_values:
                         closest_value = max(valid_values)
-                        additional_value = common_values[opt_name][str(closest_value)]
+                        additional_value = common_values[opt_name][closest_value]
                         estimated_price += additional_value
-                    if self.debug:
-                        print(f"Added value for {opt_name} {opt_value}: +{additional_value:,}")
+                        if self.debug:
+                            print(f"Added value for {opt_name} {opt_value}: +{additional_value:,}")
                 except ValueError:
                     if self.debug:
                         print(f"No cached values found for {opt_name} {opt_value}")

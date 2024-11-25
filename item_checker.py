@@ -8,6 +8,7 @@ from database import *
 from utils import *
 from market_price_cache import MarketPriceCache
 from sqlalchemy.orm import aliased
+from dotenv import load_dotenv
 
 import discord_manager
 from discord_manager import send_discord_message
@@ -662,6 +663,8 @@ class MarketMonitor:
                 time.sleep(5)
 
 def main():
+    load_dotenv()
+    
     db_manager = init_database()  # DatabaseManager() 대신 init_database() 사용
     tokens = [os.getenv('API_TOKEN_CBG_1'),
               os.getenv('API_TOKEN_CBG_2'),

@@ -143,10 +143,10 @@ def format_multiline_message(item, evaluation):
 def post_message(url, content, flags=0, wait=True):
     headers = {"Content-Type": "application/json"}
     data = f"""{{"content": "{content}", "flags": {flags}}}"""
-    host = url if wait else url + "?wait=true"
+    host = url + "?wait=true" if wait else url
     
     response = requests.post(host, headers=headers, data=data)
-    return json.loads(response.text)["id"]
+    if wait: return json.loads(response.text)["id"]
 
 def patch_message(url, message_id, content):
     headers = {"Content-Type": "application/json"}

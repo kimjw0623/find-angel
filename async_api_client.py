@@ -24,7 +24,27 @@ class TokenBatchRequester:
 
     async def initialize(self):
         if self.session is None:
-            self.session = aiohttp.ClientSession()
+            # TCP 커넥션 풀 설정
+            conn = aiohttp.TCPConnector(
+                limit=100,  # 동시 연결 수 제한
+                limit_per_host=50,  # 호스트당 최대 연결 수
+                enable_cleanup_closed=True,  # 닫힌 연결 정리
+                force_close=False,  # 연결 재사용 허용
+                ttl_dns_cache=300,  # DNS 캐시 시간 (초)
+            )
+            
+            # 타임아웃 설정
+            timeout = aiohttp.ClientTimeout(
+                total=30,  # 전체 작업 타임아웃
+                connect=10,  # 연결 타임아웃
+                sock_connect=10,  # 소켓 연결 타임아웃
+                sock_read=30  # 소켓 읽기 타임아웃
+            )
+            
+            self.session = aiohttp.ClientSession(
+                connector=conn,
+                timeout=timeout
+            )
 
     async def close(self):
         if self.session:
@@ -47,7 +67,7 @@ class TokenBatchRequester:
                     for headers in rate_limited_headers_list
                 ]
 
-                self.token_info[token]['reset_time'] = current_time + (max(retry_afters) if retry_afters else 60)
+                self.token_info[token]['reset_time'] = current_time + (max(retry_afters) if retry_afters else 60) + 1 # 안전하게 1초 추가
 
             else:
                 # 모든 응답의 remaining 값 중 최소값 사용
@@ -123,6 +143,7 @@ class TokenBatchRequester:
             next_reset = min(next_reset_times)
             wait_time = max(0, next_reset - current_time)
             print(f"All tokens exhausted. Waiting {wait_time:.1f} seconds for next reset")
+            # print(f"Current token status: {self._token_info_str()}")
             time.sleep(wait_time + 0.1)
             return self._get_available_tokens()
             
@@ -138,7 +159,7 @@ class TokenBatchRequester:
         pending_indices = list(range(len(requests)))
 
         while pending_indices:
-            print(f"\nBefore using tokens...{self._token_info_str()}")
+            # print(f"\nBefore using tokens...{self._token_info_str()}")
             available_tokens = self._get_available_tokens()
             if not available_tokens:
                 continue
@@ -157,7 +178,7 @@ class TokenBatchRequester:
                 task = self._process_batch_with_indices(
                     batch_requests, batch_indices, token, results)
                 processing_tasks.append(task)
-                print(f"token {self.token_info[token]['index']}번이 {len(batch_requests)}개 사용")
+                # print(f"token {self.token_info[token]['index']}번이 {len(batch_requests)}개 사용")
 
             if processing_tasks:
                 batch_results = await asyncio.gather(
@@ -173,10 +194,10 @@ class TokenBatchRequester:
             if remaining_indices:
                 pending_indices.extend(remaining_indices)
 
-            if pending_indices:
-                print(f"Pending_indices: {pending_indices}")
+            # if pending_indices:
+            #     print(f"Pending_indices: {pending_indices}")
 
-            print(f"After using tokens: {self._token_info_str()}\n")
+            # print(f"After using tokens: {self._token_info_str()}\n")
         return results
 
     async def _process_batch_with_indices(self, batch_requests: List[Dict], 
@@ -189,19 +210,27 @@ class TokenBatchRequester:
             retry_indices = []
             
             for idx, (index, result) in enumerate(zip(batch_indices, batch_results)):
-                if result.get('rate_limited'):
+                try:
+                    # 정상적인 응답 처리
+                    if isinstance(result, dict):
+                        if result.get('rate_limited'):
+                            retry_indices.append(index)
+                        else:
+                            results[index] = result.get('data') if result else None
+                    else:
+                        print(f"Request error at index {index}: {result}")
+                        retry_indices.append(index)
+                        
+                except Exception as e:
+                    print(f"Error processing result at index {index}: {str(e)}")
                     retry_indices.append(index)
-                    print('rate_limited 발견')
-                elif isinstance(result, Exception):
-                    print(f"Request error at index {index}: {result}")
-                    retry_indices.append(index)
-                else:
-                    results[index] = result.get('data') if result else None
 
             return {'retry_indices': retry_indices} if retry_indices else None
 
         except Exception as e:
-            print(f"Batch processing error with token {token}: {e}")
+            print(f"Batch processing error with token {token}: {str(e)}")
+            import traceback
+            print(f"Traceback:\n{traceback.format_exc()}")
             return {'retry_indices': batch_indices}
 
     async def _process_single_batch(self, batch: List[Dict], token: str) -> List[Dict]:
@@ -239,20 +268,29 @@ class TokenBatchRequester:
     async def _make_single_request(self, headers: Dict, request_data: Dict) -> Dict:
         """단일 요청 처리"""
         try:
+            # timeout을 더 길게 설정
             async with self.session.post(
                 "https://developer-lostark.game.onstove.com/auctions/items",
                 headers=headers,
                 json=request_data,
-                timeout=10
+                timeout=30  # 30초로 증가
             ) as response:
                 if response.status == 200:
-                    return {
-                        'status': 200,
-                        'data': await response.json(),
-                        'headers': dict(response.headers)
-                    }
+                    try:
+                        data = await response.json()
+                        return {
+                            'status': 200,
+                            'data': data,
+                            'headers': dict(response.headers)
+                        }
+                    except BaseException as e:
+                        print(f"Error parsing response: {str(e)}")
+                        return {
+                            'status': 'error',
+                            'error': f"JSON parse error: {str(e)}",
+                            'error_type': type(e).__name__
+                        }
                 elif response.status == 429:
-                    # 429 response header: <CIMultiDictProxy('Content-Length': '4', 'Content-Type': 'application/json; charset=utf-8', 'Retry-After': '58', 'Date': 'Tue, 26 Nov 2024 06:58:22 GMT', 'Access-Control-Allow-Credentials': 'true', 'Access-Control-Allow-Origin': '')>
                     return {
                         'status': 429,
                         'rate_limited': True,
@@ -265,9 +303,16 @@ class TokenBatchRequester:
                         'headers': dict(response.headers)
                     }
 
-        except Exception as e:
-            print(f"Request error: {e}")
+        except asyncio.CancelledError:
+            # 취소된 경우 다시 raise하여 상위에서 처리
+            raise
+
+        except BaseException as e:
+            print(f"Request error: {str(e)} ({type(e).__name__})")
+            import traceback
+            print(f"Traceback:\n{traceback.format_exc()}")
             return {
                 'status': 'error',
-                'error': str(e)
+                'error': str(e),
+                'error_type': type(e).__name__
             }

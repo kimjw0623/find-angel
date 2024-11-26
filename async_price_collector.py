@@ -8,6 +8,56 @@ from database import *
 from utils import *
 from config import config
 
+def _create_acc_hash_key(item_data: dict) -> tuple:
+    """악세서리 아이템의 해시 키 생성"""
+    # 기본 속성으로 키 구성
+    base_key = (
+        item_data['grade'],
+        item_data['name'],
+        item_data['part'],
+        item_data['level'],
+        item_data['quality'],
+        item_data['price'],
+        item_data['trade_count']
+    )
+    
+    # 옵션들을 정렬하여 튜플로 변환
+    options_key = tuple(sorted(
+        (opt[0], opt[1]) for opt in item_data['options']
+    ))
+    
+    return base_key + (options_key,)
+
+def _create_bracelet_hash_key(item_data: dict) -> tuple:
+    """팔찌 아이템의 해시 키 생성"""
+    # 기본 속성으로 키 구성
+    base_key = (
+        item_data['grade'],
+        item_data['name'],
+        item_data['price'],
+        item_data['trade_count'],
+        item_data['fixed_option_count'],
+        item_data['extra_option_count']
+    )
+    
+    # 각 옵션 타입별로 정렬된 튜플 생성
+    combat_stats = tuple(sorted(
+        (stat['stat_type'], stat['value'])
+        for stat in item_data['combat_stats']
+    ))
+    
+    base_stats = tuple(sorted(
+        (stat['stat_type'], stat['value'])
+        for stat in item_data['base_stats']
+    ))
+    
+    special_effects = tuple(sorted(
+        (effect['effect_type'], effect['value'])
+        for effect in item_data['special_effects']
+    ))
+    
+    return base_key + (combat_stats, base_stats, special_effects)
+
 class AsyncPriceCollector:
     def __init__(self, db_manager: DatabaseManager, tokens: List[str]):
         self.db = db_manager
@@ -130,13 +180,20 @@ class AsyncPriceCollector:
         # 3. 모든 요청 처리
         results = await self.requester.process_requests(all_requests)
 
-        # 4. 결과 처리
+        # 4. 결과 일괄 처리
+        all_processed_items = []
         for result in results:
             if result and not isinstance(result, Exception):
                 processed_items = self.process_acc_response(result, grade, part)
                 if processed_items:
-                    unique_items = await self.save_acc_items(processed_items, self.current_cycle_id)
-                    total_collected += unique_items
+                    all_processed_items.extend(processed_items)
+
+        # 5. 일괄 저장
+        if all_processed_items:
+            print(f"Saving {len(all_processed_items)} {grade} {part} items...")
+            unique_count = await self.save_acc_items(all_processed_items, self.current_cycle_id)
+            total_collected = len(all_processed_items) - unique_count
+            print(f"Saved {total_collected} unique items after removing {unique_count} duplicates")
 
         return total_collected
 
@@ -164,13 +221,20 @@ class AsyncPriceCollector:
         # 3. 모든 요청 처리
         results = await self.requester.process_requests(all_requests)
 
-        # 4. 결과 처리
+        # 4. 결과 일괄 처리
+        all_processed_items = []
         for result in results:
             if result and not isinstance(result, Exception):
                 processed_items = self.process_bracelet_response(result, grade)
                 if processed_items:
-                    unique_items = await self.save_bracelet_items(processed_items, self.current_cycle_id)
-                    total_collected += unique_items
+                    all_processed_items.extend(processed_items)
+
+        # 5. 일괄 저장
+        if all_processed_items:
+            print(f"Saving {len(all_processed_items)} {grade} bracelets...")
+            unique_count = await self.save_bracelet_items(all_processed_items, self.current_cycle_id)
+            total_collected = len(all_processed_items) - unique_count
+            print(f"Saved {total_collected} unique items after removing {unique_count} duplicates")
 
         return total_collected
 
@@ -356,43 +420,28 @@ class AsyncPriceCollector:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._sync_save_bracelet_items, items, search_cycle_id)
 
-    def _sync_save_acc_items(self, items, search_cycle_id):
-        """처리된 아이템 데이터를 DB에 저장"""
+    def _sync_save_acc_items(self, items: List[dict], search_cycle_id: str) -> int:
+        """개선된 악세서리 아이템 저장"""
+        # 1. 메모리 내 중복 제거
+        unique_items = {}
+        for item in items:
+            item_key = _create_acc_hash_key(item)
+            # 같은 키의 아이템 중 가장 최근 것만 유지
+            if item_key not in unique_items or item['timestamp'] > unique_items[item_key]['timestamp']:
+                unique_items[item_key] = item
+        
+        # 2. DB에 일괄 저장
         with self.db.get_write_session() as session:
-            dup_item_num = 0
-            for item_data in items:
-                # 1차 필터링: 기본 정보로 후보 아이템 조회
-                candidate_items = session.query(PriceRecord).filter(
-                    PriceRecord.grade == item_data['grade'],
-                    PriceRecord.name == item_data['name'],
-                    PriceRecord.part == item_data['part'],
-                    PriceRecord.level == item_data['level'],
-                    PriceRecord.quality == item_data['quality'],
-                    PriceRecord.price == item_data['price'],
-                    PriceRecord.search_cycle_id == search_cycle_id
-                ).all()
-
-                # 2차 필터링: 옵션 세부 비교
-                is_duplicate = False
-                for existing_item in candidate_items:
-                    session.refresh(existing_item)  # 관계 데이터 리프레시
-
-                    # 1. 명시적으로 같은 형식으로 만든 후 비교
-                    existing_options = {(opt.option_name, opt.option_grade) for opt in existing_item.options}
-                    new_options = {(opt[0], opt[1]) for opt in item_data['options']}  # 형식 명확히 지정
-
-                    # 모든 옵션이 일치하는지 확인
-                    if existing_options == new_options:
-                        is_duplicate = True
-                        dup_item_num += 1
-                        break
-
-                if is_duplicate:
-                    continue
-
+            # 현재 사이클의 기존 아이템 확인
+            existing_count = session.query(PriceRecord).filter(
+                PriceRecord.search_cycle_id == search_cycle_id
+            ).count()
+            
+            # 새 아이템들만 저장
+            for item_data in unique_items.values():
                 record = PriceRecord(
                     timestamp=item_data['timestamp'],
-                    search_cycle_id=search_cycle_id,  # 추가
+                    search_cycle_id=search_cycle_id,
                     grade=item_data['grade'],
                     name=item_data['name'],
                     part=item_data['part'],
@@ -403,16 +452,16 @@ class AsyncPriceCollector:
                     end_time=item_data['end_time'],
                     damage_increment=item_data.get('damage_increment')
                 )
-
-                # 옵션 저장
+                
+                # 옵션 추가
                 for opt_name, opt_grade in item_data['options']:
                     option = ItemOption(
                         option_name=opt_name,
                         option_grade=opt_grade
                     )
                     record.options.append(option)
-
-                # 원본 옵션 저장
+                
+                # 원본 옵션 추가
                 for raw_opt in item_data['raw_options']:
                     raw_option = RawItemOption(
                         option_name=raw_opt['option_name'],
@@ -420,62 +469,36 @@ class AsyncPriceCollector:
                         is_percentage=raw_opt['is_percentage']
                     )
                     record.raw_options.append(raw_option)
-
+                
                 session.add(record)
-            return dup_item_num
+            
+            session.flush()
+            
+            # 중복 제거된 수 반환
+            return len(items) - len(unique_items)
 
-    def _sync_save_bracelet_items(self, items, search_cycle_id):
-        """처리된 팔찌 데이터를 DB에 저장"""
+    def _sync_save_bracelet_items(self, items: List[dict], search_cycle_id: str) -> int:
+        """개선된 팔찌 아이템 저장"""
+        # 1. 메모리 내 중복 제거
+        unique_items = {}
+        for item in items:
+            item_key = _create_bracelet_hash_key(item)
+            # 같은 키의 아이템 중 가장 최근 것만 유지
+            if item_key not in unique_items or item['timestamp'] > unique_items[item_key]['timestamp']:
+                unique_items[item_key] = item
+        
+        # 2. DB에 일괄 저장
         with self.db.get_write_session() as session:
-            dup_item_num = 0
-            for item_data in items:
-                # 1차 필터링: 기본 정보로 후보 아이템 조회
-                candidate_items = session.query(BraceletPriceRecord).filter(
-                    BraceletPriceRecord.grade == item_data['grade'],
-                    BraceletPriceRecord.name == item_data['name'],
-                    BraceletPriceRecord.price == item_data['price'],
-                    BraceletPriceRecord.fixed_option_count == item_data['fixed_option_count'],
-                    BraceletPriceRecord.extra_option_count == item_data['extra_option_count'],
-                    BraceletPriceRecord.search_cycle_id == search_cycle_id,
-                ).all()
-
-                # 2차 필터링: 옵션 세부 비교
-                is_duplicate = False
-                for existing_item in candidate_items:
-                    session.refresh(existing_item)  # 관계 데이터 리프레시
-
-                    # 전투특성 비교
-                    existing_combat_stats = {(stat.stat_type, stat.value) 
-                                        for stat in existing_item.combat_stats}
-                    new_combat_stats = {(stat['stat_type'], stat['value']) 
-                                    for stat in item_data['combat_stats']}
-                    
-                    # 기본스탯 비교
-                    existing_base_stats = {(stat.stat_type, stat.value) 
-                                        for stat in existing_item.base_stats}
-                    new_base_stats = {(stat['stat_type'], stat['value']) 
-                                    for stat in item_data['base_stats']}
-                    
-                    # 특수효과 비교
-                    existing_special_effects = {(effect.effect_type, effect.value) 
-                                            for effect in existing_item.special_effects}
-                    new_special_effects = {(effect['effect_type'], effect['value']) 
-                                        for effect in item_data['special_effects']}
-
-                    # 모든 옵션이 일치하는지 확인
-                    if (existing_combat_stats == new_combat_stats and
-                        existing_base_stats == new_base_stats and
-                        existing_special_effects == new_special_effects):
-                        dup_item_num += 1
-                        is_duplicate = True
-                        break
-
-                if is_duplicate:
-                    continue
-
+            # 현재 사이클의 기존 아이템 확인
+            existing_count = session.query(BraceletPriceRecord).filter(
+                BraceletPriceRecord.search_cycle_id == search_cycle_id
+            ).count()
+            
+            # 새 아이템들만 저장
+            for item_data in unique_items.values():
                 record = BraceletPriceRecord(
                     timestamp=item_data['timestamp'],
-                    search_cycle_id=search_cycle_id,  # 추가
+                    search_cycle_id=search_cycle_id,
                     grade=item_data['grade'],
                     name=item_data['name'],
                     trade_count=item_data['trade_count'],
@@ -484,33 +507,37 @@ class AsyncPriceCollector:
                     fixed_option_count=item_data['fixed_option_count'],
                     extra_option_count=item_data['extra_option_count']
                 )
-
-                # 전투특성 저장
+                
+                # 전투특성 추가
                 for stat in item_data['combat_stats']:
                     combat_stat = BraceletCombatStat(
                         stat_type=stat['stat_type'],
                         value=stat['value']
                     )
                     record.combat_stats.append(combat_stat)
-
-                # 기본스탯 저장
+                
+                # 기본스탯 추가
                 for stat in item_data['base_stats']:
                     base_stat = BraceletBaseStat(
                         stat_type=stat['stat_type'],
                         value=stat['value']
                     )
                     record.base_stats.append(base_stat)
-
-                # 특수효과 저장 
+                
+                # 특수효과 추가
                 for effect in item_data['special_effects']:
                     special_effect = BraceletSpecialEffect(
-                        effect_type=effect['effect_type'],  # 딕셔너리의 effect_type 키
-                        value=effect['value']               # 딕셔너리의 value 키
+                        effect_type=effect['effect_type'],
+                        value=effect['value']
                     )
                     record.special_effects.append(special_effect)
-
+                
                 session.add(record)
-            return dup_item_num
+            
+            session.flush()
+            
+            # 중복 제거된 수 반환
+            return len(items) - len(unique_items)
 
 class SearchPresetGenerator:
     def __init__(self):

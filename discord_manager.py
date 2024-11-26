@@ -1,6 +1,7 @@
 import multiprocessing as mp
 import requests
 import json
+import time
 from queue import Empty
 import os
 import utils, price_collector
@@ -205,14 +206,18 @@ def discord_manager(queue, url):
     while True:
         try:
             item, evaluation, message_id, message = queue.get(timeout=1)
+            registered_time = time.time()
         except Empty:
             if len(interesting_items) > 0:
-                item, evaluation, message_id, message = interesting_items.pop()
+                item, evaluation, message_id, message, registered_time = interesting_items.pop()
             else:
                 continue
 
         isExist = check_existance(item, evaluation)
         if isExist:
-            interesting_items.insert(0, (item, evaluation, message_id, message))
+            if time.time() - registered_time > 600: # 10분동안 tracking
+                patch_message(url, message_id, message.replace("만료", "[추적 종료됨] 만료"))
+            else:
+                interesting_items.insert(0, (item, evaluation, message_id, message, registered_time))
         else:
             patch_message(url, message_id, f"~~{message}~~")

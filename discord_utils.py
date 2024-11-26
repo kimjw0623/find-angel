@@ -120,19 +120,23 @@ def formatted_discord_message(url, item, evaluation, debug=False):
     if evaluation["type"] == "accessory": # 장신구
         toSend += f"품질 {quality_color(evaluation['quality'])}{evaluation['quality']}{RESET} 거래 {item['AuctionInfo']['TradeAllowCount']}회\\n"
         toSend += f"{evaluation['current_price']:,}골드 vs {evaluation['expected_price']:,}골드 ({evaluation['price_ratio']*100:.1f}%)\\n"
+        options = []
         for opt in item["Options"]:
             if opt["OptionName"] == "깨달음":
                 continue
             color, scale = accessory_option(opt)
-            toSend += f"{color}{opt['OptionName']} {scale}{RESET} "
+            options.append(f"{color}{opt['OptionName']} {scale}{RESET}")
+        toSend += " | ".join(options)
 
     else:  # 팔찌
         toSend += f"{evaluation['current_price']:,}골드 vs {evaluation['expected_price']:,}골드 ({evaluation['price_ratio']*100:.1f}%)\\n"
+        options = []
         for opt in item["Options"]:
             if opt["OptionName"] == "도약":
                 continue
             color = bracelet_option_color(opt, evaluation['grade'])
-            toSend += f"{color}{opt['OptionName']} {int(opt['Value'])}{RESET} "
+            options.append(f"{color}{opt['OptionName']} {int(opt['Value'])}{RESET}")
+        toSend += " | ".join(options)
     
     toSend += f"\\n만료 {item['AuctionInfo']['EndDate']}\\n```"
     if debug:

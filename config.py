@@ -9,7 +9,7 @@ class Config:
         
         # 용도별 토큰 로드
         self.price_tokens = self._load_tokens_by_prefix('PRICE_TOKEN_')
-        # self.monitor_tokens = self._load_tokens_by_prefix('MONITOR_TOKEN_')
+        self.monitor_tokens = self._load_tokens_by_prefix('MONITOR_TOKEN_')
         # self.abidos_tokens = self._load_tokens_by_prefix('ABIDOS_TOKEN_')
 
     def _load_tokens_by_prefix(self, prefix: str) -> List[str]:

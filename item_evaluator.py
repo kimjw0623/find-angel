@@ -6,7 +6,6 @@ from database import *
 from utils import *
 from market_price_cache import MarketPriceCache
 from sqlalchemy.orm import aliased
-from discord_utils import send_discord_message
 
 class ItemEvaluator:
     def __init__(self, price_cache, debug=False):
@@ -427,7 +426,7 @@ class ItemEvaluator:
         # if level < 3 and expected_price > 40000 and price_ratio < 0.45:
         #     return True
         # return False
-        if price_ratio < 0.5 and expected_price > 10000:
+        if price_ratio < 0.9 and expected_price > 10000:
             return True
         return False
 
@@ -436,6 +435,6 @@ class ItemEvaluator:
         # if expected_price > 50000 and price_ratio < 0.7:
         #     return True
         # return False
-        if price_ratio < 0.5 and expected_price > 10000:
+        if price_ratio < 0.9 and expected_price > 10000:
             return True
         return False

@@ -20,6 +20,22 @@ Grade: 고대, 유물 등
 LeveL: 연마 단계
 Scale: 하옵 중옵 상옵
 
+First 8 아크패시브
+Second 1 깨달음
+Second 2 도약
+First 7 연마 효과
+Second 쭉쭉..
+Second ...
+Second ...
+First 6 감소 효과
+First 3 각인 효과
+First 2 전투 특성(치특신제인숙)
+First 1 팔찌 기본 효과(힘민지체)
+First 4 팔찌 옵션 수량
+Second 1 고졍 효과 수량
+Second 2 부여 효과 수량
+First 5 팔찌 특수 효과
+
 """
 number_to_scale = {
     # 하중상을 뭐라고 할 질 모르겠어서(level, grade는 이미 있다...) 일단 scale로 두었다.

@@ -6,19 +6,25 @@ from queue import Empty
 import os
 import utils, price_collector
 
+
 RESET = "\\u001b[0m"
 
-def init_discord_manager(url, accept_queue, readback_queue):
+def init_discord_manager(accept_queue):
+    url = os.getenv("WEBHOOK2")
+    readback_queue = mp.Queue()
+
+    post_message(url, "경매장 모니터 시작", flags=1 << 12)
     p_reflex = mp.Process(target=message_reflex, args=(accept_queue, readback_queue, url))
     p_reflex.start()
     p_manager = mp.Process(target=discord_manager, args=(readback_queue, url))
     p_manager.start()
 
-    return p_reflex, p_manager
+    def terminate():
+        p_reflex.terminate()
+        p_manager.terminate()
+        post_message(url, "경매장 모니터 종료", flags=1 << 12)
 
-def stop(p_reflex, p_manager):
-    p_reflex.terminate()
-    p_manager.terminate()
+    return terminate
     
 def accessory_option(opt):
     colorList = ["\\u001b[2;30m", "\\u001b[2;34m", "\\u001b[2;35m", "\\u001b[2;33m"]

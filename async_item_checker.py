@@ -4,18 +4,21 @@ from datetime import datetime, timedelta
 from async_api_client import TokenBatchRequester
 from database import DatabaseManager
 from market_price_cache import MarketPriceCache
-from discord_utils import *
+from discord_manager import send_discord_message, init_discord_manager
+import multiprocessing as mp
 from utils import *
 from config import config
 import os
 from item_evaluator import ItemEvaluator
+from dotenv import load_dotenv
+
 
 class AsyncMarketScanner:
-    def __init__(self, evaluator, tokens: List[str]):
+    def __init__(self, evaluator, tokens: List[str], msg_queue: mp.Queue):
         self.evaluator = evaluator
         self.requester = TokenBatchRequester(tokens)
-        self.webhook1 = os.getenv("WEBHOOK1")
-        self.webhook2 = os.getenv("WEBHOOK2")
+        self.webhook = os.getenv("WEBHOOK1")
+        self.msg_queue = msg_queue
         
         # 마지막 체크 시간 초기화
         self.last_expireDate_3day = None
@@ -108,7 +111,8 @@ class AsyncMarketScanner:
                             count += 1
                             evaluation = self.evaluator.evaluate_item(item)
                             if evaluation and evaluation["is_notable"]:
-                                send_discord_message(self.webhook1, item, evaluation, url2=self.webhook2)
+                                send_discord_message(self.webhook, item, evaluation)
+                                self.msg_queue.put((item, evaluation))
 
                     # 다음 배치로 이동
                     start_page += BATCH_SIZE
@@ -141,10 +145,10 @@ class AsyncMarketScanner:
         }
 
 class AsyncMarketMonitor:
-    def __init__(self, db_manager: DatabaseManager, tokens: List[str], debug: bool = False):
+    def __init__(self, db_manager: DatabaseManager, msg_queue: mp.Queue, tokens: List[str], debug: bool = False):
         price_cache = MarketPriceCache(db_manager, debug=debug)
         self.evaluator = ItemEvaluator(price_cache, debug=debug)
-        self.scanner = AsyncMarketScanner(self.evaluator, tokens)
+        self.scanner = AsyncMarketScanner(self.evaluator, tokens, msg_queue)
 
     async def run(self):
         """비동기 모니터링 실행"""
@@ -162,9 +166,17 @@ class AsyncMarketMonitor:
                 await asyncio.sleep(5)
 
 async def main():
-    db_manager = DatabaseManager()    
-    monitor = AsyncMarketMonitor(db_manager, tokens=config.monitor_tokens, debug=False)
-    await monitor.run()
+    try:
+        db_manager = DatabaseManager()    
+        msg_queue = mp.Queue()
+        
+        monitor = AsyncMarketMonitor(db_manager, msg_queue, tokens=config.monitor_tokens, debug=False)
+        terminator = init_discord_manager(msg_queue)
+
+        await monitor.run()
+
+    finally:
+        terminator()
 
 if __name__ == "__main__":
     asyncio.run(main())

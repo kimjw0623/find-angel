@@ -93,14 +93,14 @@ class AsyncMarketScanner:
                             if next_expire_date is None:
                                 next_expire_date = end_time
                             if days == 1 and next_last_page_index_1day is None:
-                                print(f"첫 템 정해짐: {end_time}이 1일차 검색의 다음 expire_date, 현재 시간과 차이 {(datetime.now() + timedelta(days=1) - end_time).total_seconds():.3f}")
+                                # print(f"첫 템 정해짐: {end_time}이 1일차 검색의 다음 expire_date, 현재 시간과 차이 {(datetime.now() + timedelta(days=1) - end_time).total_seconds():.3f}")
                                 next_last_page_index_1day = current_page
                             
                             if end_time <= last_expireDate:
                                 if days == 1:
                                     self.last_page_index_1day = next_last_page_index_1day
                                     self.last_expireDate_1day = next_expire_date
-                                    print(f"1일차 검색: {count}개 아이템 검색됨")
+                                    # print(f"1일차 검색: {count}개 아이템 검색됨")
                                 if days == 3:
                                     self.last_expireDate_3day = next_expire_date
                                 return
@@ -153,7 +153,7 @@ class AsyncMarketMonitor:
         while True:
             try:
                 await self.scanner.scan_market()
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(1)
             except KeyboardInterrupt:
                 print("\nStopping market monitoring...")
                 break

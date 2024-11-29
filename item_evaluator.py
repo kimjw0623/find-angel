@@ -418,6 +418,15 @@ class ItemEvaluator:
             "is_notable": self._is_notable_bracelet(current_price, expected_price, price_ratio),
         }
 
+    def _sigmoid(self, expected_price: int) -> float:
+        min_ratio = 0.5
+        max_ratio = 0.75
+        max_price = 400000
+        k3 = 3e-5  # 가장 완만한 기울기
+        midpoint3 = max_price*2/3  # 가장 늦은 변곡점
+        sigmoid_ratio = min_ratio + (max_ratio - min_ratio) / (1 + np.exp(-k3 * (expected_price - midpoint3)))
+        return expected_price * sigmoid_ratio
+
     def _is_notable_accessory(
         self, level: int, current_price: int, expected_price: int, price_ratio: float
     ) -> bool:
@@ -427,7 +436,7 @@ class ItemEvaluator:
         # if level < 3 and expected_price > 40000 and price_ratio < 0.45:
         #     return True
         # return False
-        if price_ratio < 0.5 and expected_price > 10000:
+        if expected_price > 10000 and current_price < self._sigmoid(expected_price):
             return True
         return False
 
@@ -436,6 +445,6 @@ class ItemEvaluator:
         # if expected_price > 50000 and price_ratio < 0.7:
         #     return True
         # return False
-        if price_ratio < 0.5 and expected_price > 10000:
+        if expected_price > 10000 and current_price < self._sigmoid(expected_price):
             return True
         return False

@@ -1,24 +1,27 @@
 import os
 import time
 import threading
-import requests
-import numpy as np
+import multiprocessing as mp
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple, Any
 from database import *
 from utils import *
 from market_price_cache import MarketPriceCache
 from sqlalchemy.orm import aliased
-from discord_utils import send_discord_message
+from dotenv import load_dotenv
+
+import discord_manager
+from discord_manager import send_discord_message
 from item_evaluator import ItemEvaluator
 from config import config
 
 class MarketScanner:
-    def __init__(self, evaluator, tokens):
+    def __init__(self, evaluator, tokens, msg_queue):
         self.evaluator = evaluator
         self.token_manager = TokenManager(tokens)
         self.webhook1 = os.getenv("WEBHOOK1")
         self.webhook2 = os.getenv("WEBHOOK2")
+        self.msg_queue = msg_queue
 
         # 마지막 체크 시간 초기화
         self.last_expireDate_3day = None
@@ -108,7 +111,8 @@ class MarketScanner:
                     # 즉시 평가 및 처리
                     evaluation = self.evaluator.evaluate_item(item)
                     if evaluation and evaluation["is_notable"]:
-                        send_discord_message(self.webhook1, item, evaluation, url2=self.webhook2)
+                        send_discord_message(self.webhook1, item, evaluation)
+                        self.msg_queue.put((item, evaluation))
 
                 page_no += 1
 
@@ -208,10 +212,10 @@ class MarketScanner:
         return page_no
 
 class MarketMonitor:
-    def __init__(self, db_manager, tokens, debug=False):
+    def __init__(self, db_manager, tokens, msg_queue, debug=False):
         price_cache = MarketPriceCache(db_manager, debug=debug)
         self.evaluator = ItemEvaluator(price_cache, debug=debug)
-        self.scanner = MarketScanner(self.evaluator, tokens=tokens)
+        self.scanner = MarketScanner(self.evaluator, tokens=tokens, msg_queue=msg_queue)
 
     def run(self):
         """모니터링 실행"""
@@ -229,9 +233,26 @@ class MarketMonitor:
                 time.sleep(5)
 
 def main():
+    load_dotenv()
+    
     db_manager = init_database()  # DatabaseManager() 대신 init_database() 사용
-    monitor = MarketMonitor(db_manager, tokens=config.monitor_tokens, debug=False)
-    monitor.run()
+    try:
+        msg_queue = mp.Queue()
+        readback_queue = mp.Queue()
+        webhook2 = os.getenv("WEBHOOK2")
+
+        monitor = MarketMonitor(db_manager, tokens=tokens, msg_queue=msg_queue, debug=False)
+        p1, p2 = discord_manager.init_discord_manager(webhook2, msg_queue, readback_queue)
+
+        discord_manager.post_message(webhook2, "경매장 모니터 시작", flags=1 << 12)
+
+        monitor.run()
+    except Exception:
+        pass
+    finally:
+        discord_manager.stop(p1, p2)
+        discord_manager.post_message(webhook2, "경매장 모니터 종료", flags=1 << 12)
+        
 
 if __name__ == "__main__":  
     main()

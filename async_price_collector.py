@@ -72,13 +72,13 @@ class AsyncPriceCollector:
         """메인 실행 함수"""
         while True:
             try:
-                # # 다음 실행 시간까지 대기
-                # next_run = self._get_next_run_time()
-                # wait_seconds = (next_run - datetime.now()).total_seconds()
-                # if wait_seconds > 0:
-                #     print(f"다음 실행 시간: {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
-                #     print(f"대기 중... ({int(wait_seconds)}초)")
-                #     await asyncio.sleep(wait_seconds)
+                # 다음 실행 시간까지 대기
+                next_run = self._get_next_run_time()
+                wait_seconds = (next_run - datetime.now()).total_seconds()
+                if wait_seconds > 0:
+                    print(f"다음 실행 시간: {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
+                    print(f"대기 중... ({int(wait_seconds)}초)")
+                    await asyncio.sleep(wait_seconds)
 
                 # 가격 수집 실행
                 start_time = datetime.now()

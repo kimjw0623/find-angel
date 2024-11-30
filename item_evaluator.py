@@ -118,104 +118,111 @@ class ItemEvaluator:
         return reference_options
     
     def _estimate_dealer_price(self, reference_options: Dict[str, Any], 
-                            price_data: Dict[str, Any]) -> int:
+                            price_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        딜러용 가격 추정
-        모든 아이템은 최소한 base_price를 가지며,
-        옵션이 있는 경우 해당 옵션들의 가치를 더함
+        딜러용 가격 추정 및 상세 계산 내역 반환
         """
-        # 기본 가격에서 시작
-        estimated_price = price_data['base_price']
+        # 기본 가격
+        base_price = price_data['base_price']
+        result = {
+            'base_price': base_price,
+            'options': {},
+            'quality_adjustment': 0,
+            'trade_adjustment': 0,
+            'final_price': base_price
+        }
 
-        # Common 딜러용 보너스 옵션 가치 추가
+        # 딜러용 보너스 옵션 가치 계산
         for opt_name, opt_value in reference_options["dealer_bonus"]:
             common_values = price_data.get('common_option_values', {})
             if opt_name in common_values and common_values[opt_name]:
                 try:
-                    # 정확히 일치하거나 더 작은 값들 중 최대값 찾기
                     valid_values = [float(v) for v in common_values[opt_name].keys() 
                                 if float(v) <= opt_value]
                     if valid_values:
                         closest_value = max(valid_values)
                         additional_value = common_values[opt_name][closest_value]
-                        estimated_price += additional_value
-                        if self.debug:
-                            print(f"Added value for {opt_name} {opt_value}: +{additional_value:,}")
+                        result['options'][opt_name] = {
+                            'value': opt_value,
+                            'price': additional_value
+                        }
+                        result['final_price'] += additional_value
                 except ValueError:
                     if self.debug:
                         print(f"No cached values found for {opt_name} {opt_value}")
                     continue
 
-        # 품질 보정 (항상 적용)
-        quality_diff = reference_options["base_info"]["quality"] - 67  # 67이 기준 품질
-        quality_adjustment = quality_diff * price_data['quality_coefficient'] * 0.5 # 보수적으로 잡기 위해 0.5 넣음
-        estimated_price += quality_adjustment
+        # 품질 보정
+        quality_diff = reference_options["base_info"]["quality"] - 67
+        quality_adjustment = int(quality_diff * price_data['quality_coefficient'] * 0.5)
+        result['quality_adjustment'] = quality_adjustment
+        result['final_price'] += quality_adjustment
 
-        # 거래 횟수 보정 (항상 적용)
-        trade_diff = reference_options["base_info"]["trade_count"] - 2  # 2회가 기준
-        if trade_diff < 0:  # 거래 횟수가 적으면 가치 감소
-            trade_adjustment = trade_diff * abs(price_data['trade_count_coefficient'])
-            estimated_price += trade_adjustment
+        # 거래 횟수 보정
+        trade_diff = reference_options["base_info"]["trade_count"] - 2
+        if trade_diff < 0:
+            trade_adjustment = int(trade_diff * abs(price_data['trade_count_coefficient']))
+            result['trade_adjustment'] = trade_adjustment
+            result['final_price'] += trade_adjustment
 
-        if self.debug:
-            print("\nDealer price estimation:")
-            print(f"Base price: {price_data['base_price']:,}")
-            print(f"Quality adjustment: {quality_adjustment:,}")
-            print(f"Trade adjustment: {trade_adjustment if 'trade_adjustment' in locals() else 0:,}")
-            print(f"Final estimate: {estimated_price:,}")
-
-        return max(int(estimated_price), 1)
+        result['final_price'] = max(int(result['final_price']), 1)
+        return result
     
     def _estimate_support_price(self, reference_options: Dict[str, Any], 
-                            price_data: Dict[str, Any]) -> int:
+                            price_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        서포터용 가격 추정
-        모든 아이템은 최소한 base_price를 가지며,
-        옵션이 있는 경우 해당 옵션들의 가치를 더함
+        서포터용 가격 추정 및 상세 계산 내역 반환
         """
-        # 기본 가격에서 시작
-        estimated_price = price_data['base_price']
+        # 기본 가격
+        base_price = price_data['base_price']
+        result = {
+            'base_price': base_price,
+            'options': {},
+            'quality_adjustment': 0,
+            'trade_adjustment': 0,
+            'final_price': base_price
+        }
 
-        # 서포터용 보너스 옵션 가치 추가
+        # 서포터용 보너스 옵션 가치 계산
         for opt_name, opt_value in reference_options["support_bonus"]:
             common_values = price_data.get('common_option_values', {})
             if opt_name in common_values and common_values[opt_name]:
                 try:
-                    # 정확히 일치하거나 더 작은 값들 중 최대값 찾기
                     valid_values = [float(v) for v in common_values[opt_name].keys() 
                                 if float(v) <= opt_value]
                     if valid_values:
                         closest_value = max(valid_values)
                         additional_value = common_values[opt_name][closest_value]
-                        estimated_price += additional_value
-                        if self.debug:
-                            print(f"Added value for {opt_name} {opt_value}: +{additional_value:,}")
+                        result['options'][opt_name] = {
+                            'value': opt_value,
+                            'price': additional_value
+                        }
+                        result['final_price'] += additional_value
                 except ValueError:
                     if self.debug:
                         print(f"No cached values found for {opt_name} {opt_value}")
                     continue
 
-        # 품질 보정 (항상 적용)
+        # 품질 보정
         quality_diff = reference_options["base_info"]["quality"] - 67
-        quality_adjustment = quality_diff * price_data['quality_coefficient'] * 0.5 # 보수적으로 잡기 위해 0.5 넣음
-        estimated_price += quality_adjustment
+        quality_adjustment = int(quality_diff * price_data['quality_coefficient'] * 0.5)
+        result['quality_adjustment'] = quality_adjustment
+        result['final_price'] += quality_adjustment
 
-        # 거래 횟수 보정 (항상 적용)
+        # 거래 횟수 보정
         trade_diff = reference_options["base_info"]["trade_count"] - 2
-        if trade_diff < 0:  # 거래 횟수가 적으면 가치 감소
-            trade_adjustment = trade_diff * abs(price_data['trade_count_coefficient'])
-            estimated_price += trade_adjustment
+        if trade_diff < 0:
+            trade_adjustment = int(trade_diff * abs(price_data['trade_count_coefficient']))
+            result['trade_adjustment'] = trade_adjustment
+            result['final_price'] += trade_adjustment
 
-        if self.debug:
-            print("\nSupport price estimation:")
-            print(f"Base price: {price_data['base_price']:,}")
-            print(f"Quality adjustment: {quality_adjustment:,}")
-            print(f"Trade adjustment: {trade_adjustment if 'trade_adjustment' in locals() else 0:,}")
-            print(f"Final estimate: {estimated_price:,}")
-
-        return max(int(estimated_price), 1)
+        result['final_price'] = max(int(result['final_price']), 1)
+        return result
 
     def _estimate_acc_price(self, item: Dict, grade: str, part: str, level: int) -> Dict[str, Any]:
+        """
+        악세서리 가격 추정 및 상세 계산 내역 반환
+        """
         try:
             if self.debug:
                 print(f"\n=== Price Estimation Debug ===")
@@ -235,28 +242,27 @@ class ItemEvaluator:
             # 캐시된 가격 데이터 조회
             price_data = self.price_cache.get_price_data(grade, part, level, reference_options)
 
-            # 딜러용/서포터용 가격 추정 - 항상 양쪽 다 계산
-            dealer_price = self._estimate_dealer_price(reference_options, price_data["dealer"])
-            support_price = self._estimate_support_price(reference_options, price_data["support"])
+            # 딜러용/서포터용 가격 추정 - 상세 내역 포함
+            dealer_details = self._estimate_dealer_price(reference_options, price_data["dealer"])
+            support_details = self._estimate_support_price(reference_options, price_data["support"])
 
-            # has_options는 여전히 실제 옵션 존재 여부로 판단
             result = {
-                "dealer_price": dealer_price,
-                "support_price": support_price,
-                "has_dealer_options": bool(reference_options["dealer_exclusive"] or reference_options["dealer_bonus"]),
-                "has_support_options": bool(reference_options["support_exclusive"] or reference_options["support_bonus"]),
+                'dealer_details': dealer_details,
+                'support_details': support_details,
+                'has_dealer_options': bool(reference_options["dealer_exclusive"] or reference_options["dealer_bonus"]),
+                'has_support_options': bool(reference_options["support_exclusive"] or reference_options["support_bonus"]),
             }
 
-            # 최종 타입과 가격 결정 - 항상 둘 중 더 높은 쪽으로
-            if dealer_price > support_price:
+            # 최종 타입과 가격 결정
+            if dealer_details['final_price'] > support_details['final_price']:
                 result.update({
-                    "type": "dealer",
-                    "price": dealer_price
+                    'type': '딜러',
+                    'price': dealer_details['final_price']
                 })
             else:
                 result.update({
-                    "type": "support",
-                    "price": support_price
+                    'type': '서폿',
+                    'price': support_details['final_price']
                 })
 
             return result
@@ -266,19 +272,20 @@ class ItemEvaluator:
                 print(f"Error in price estimation: {str(e)}")
                 import traceback
                 traceback.print_exc()
-            # 에러가 발생해도 현재 가격으로 기본 결과 반환
             return {
-                "type": "dealer" if any(opt[0] in ["추피", "적주피", "공퍼", "무공퍼", "치적", "치피"] 
-                                    for opt in reference_options["dealer_exclusive"]) else "support",
-                "price": current_price,
-                "dealer_price": current_price if reference_options["dealer_exclusive"] else None,
-                "support_price": current_price if reference_options["support_exclusive"] else None,
-                "has_dealer_options": bool(reference_options["dealer_exclusive"]),
-                "has_support_options": bool(reference_options["support_exclusive"]),
+                'type': 'dealer' if any(opt[0] in ["추피", "적주피", "공퍼", "무공퍼", "치적", "치피"] 
+                                    for opt in reference_options["dealer_exclusive"]) else 'support',
+                'price': current_price,
+                'dealer_details': {'final_price': current_price} if reference_options["dealer_exclusive"] else None,
+                'support_details': {'final_price': current_price} if reference_options["support_exclusive"] else None,
+                'has_dealer_options': bool(reference_options["dealer_exclusive"]),
+                'has_support_options': bool(reference_options["support_exclusive"]),
             }
 
     def evaluate_item(self, item: Dict) -> Optional[Dict]:
-        """아이템 평가"""
+        """
+        아이템 평가 및 상세 정보 반환
+        """
         if not item["AuctionInfo"]["BuyPrice"]:
             return None
 
@@ -286,53 +293,54 @@ class ItemEvaluator:
         if "팔찌" in item["Name"]:
             return self._evaluate_bracelet(item)
         else:
-            fix_dup_options(item) # 중복 옵션 처리해서 보내기
+            fix_dup_options(item)
             return self._evaluate_accessory(item)
 
     def _evaluate_accessory(self, item: Dict) -> Optional[Dict]:
-            grade = item["Grade"]
-            level = len(item["Options"]) - 1
+        grade = item["Grade"]
+        level = len(item["Options"]) - 1
 
-            # 파트 확인
-            if "목걸이" in item["Name"]:
-                part = "목걸이"
-            elif "귀걸이" in item["Name"]:
-                part = "귀걸이"
-            elif "반지" in item["Name"]:
-                part = "반지"
-            else:
-                return None
+        # 파트 확인
+        if "목걸이" in item["Name"]:
+            part = "목걸이"
+        elif "귀걸이" in item["Name"]:
+            part = "귀걸이"
+        elif "반지" in item["Name"]:
+            part = "반지"
+        else:
+            return None
 
-            # 기본 검증
-            if item["GradeQuality"] < 67:
-                # print("품질이 67 미만임")
-                return None
+        # 기본 검증
+        if item["GradeQuality"] < 67:
+            return None
 
-            # 가격 추정
-            estimate_result = self._estimate_acc_price(item, grade, part, level)
+        # 가격 추정 (상세 내역 포함)
+        estimate_result = self._estimate_acc_price(item, grade, part, level)
 
-            current_price = item["AuctionInfo"]["BuyPrice"]
-            expected_price = estimate_result["price"]
-            price_ratio = current_price / expected_price
-            profit = expected_price - current_price
+        current_price = item["AuctionInfo"]["BuyPrice"]
+        expected_price = estimate_result["price"]
+        price_ratio = current_price / expected_price
+        profit = expected_price - current_price
 
-            return {
-                "type": "accessory",
-                "grade": grade,
-                "part": part,
-                "level": level,
-                "quality": item["GradeQuality"],
-                "current_price": current_price,
-                "expected_price": expected_price,
-                "price_ratio": price_ratio,
-                "profit": profit,
-                "usage_type": estimate_result["type"],
-                "dealer_price": estimate_result["dealer_price"],
-                "support_price": estimate_result["support_price"],
-                "has_dealer_options": estimate_result["has_dealer_options"],
-                "has_support_options": estimate_result["has_support_options"],
-                "is_notable": self._is_notable_accessory(level, current_price, expected_price, price_ratio)
-            }
+        return {
+            "type": "accessory",
+            "grade": grade,
+            "part": part,
+            "level": level,
+            "quality": item["GradeQuality"],
+            "current_price": current_price,
+            "expected_price": expected_price,
+            "price_ratio": price_ratio,
+            "profit": profit,
+            "usage_type": estimate_result["type"],
+            "price_details": {
+                "딜러": estimate_result["dealer_details"],
+                "서폿": estimate_result["support_details"]
+            },
+            "has_dealer_options": estimate_result["has_dealer_options"],
+            "has_support_options": estimate_result["has_support_options"],
+            "is_notable": self._is_notable_accessory(level, current_price, expected_price, price_ratio)
+        }
 
     def _evaluate_bracelet(self, item: Dict) -> Optional[Dict]:
         """팔찌 평가"""

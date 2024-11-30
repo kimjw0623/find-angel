@@ -6,7 +6,6 @@ from database import *
 from utils import *
 from market_price_cache import MarketPriceCache
 from sqlalchemy.orm import aliased
-from discord_utils import send_discord_message
 
 class ItemEvaluator:
     def __init__(self, price_cache, debug=False):

@@ -4,7 +4,6 @@ import numpy as np
 from typing import List, Dict, Optional, Tuple, Any
 from database import *
 from utils import *
-from market_price_cache import MarketPriceCache
 from sqlalchemy.orm import aliased
 
 class ItemEvaluator:

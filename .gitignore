@@ -23,6 +23,9 @@ sim_result
 lostark_prices.db
 lostark_prices.db-shm
 lostark_prices.db-wal
+lostark_cache.db
+lostark_cache.db-shm
+lostark_cache.db-wal
 market_price_cache.pkl
 price_calculation.log
 __pycache__/utils.cpython-39.pyc

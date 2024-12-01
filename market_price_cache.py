@@ -2,12 +2,15 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional, Any
 import numpy as np
 from database import *
+from cache_database import *
 import pickle
 import time
 import os
 import sys
 import threading
 from contextlib import contextmanager, nullcontext
+import uuid
+import json
 
 @contextmanager
 def redirect_stdout(file_path, mode='a'):
@@ -20,142 +23,23 @@ def redirect_stdout(file_path, mode='a'):
         finally:
             sys.stdout = original_stdout
 
-class DoubleBufferCache:
-    def __init__(self, cache_name: str):
-        """
-        Double buffering cache initialization
-        cache_name: 캐시 파일의 기본 이름 (예: 'market_price')
-        """
-        self.cache_name = cache_name
-        self.cache_files = [f"{cache_name}_0.pkl", f"{cache_name}_1.pkl"]
-        self.active_index_file = f"{cache_name}_active.txt"  # 현재 활성화된 캐시 인덱스
-        self.lock_file_path = f"{cache_name}_active.lock"  # 현재 활성화된 캐시 인덱스의 락 파일
-        self._initialize_cache_files()
-
-    def _initialize_cache_files(self):
-        """캐시 파일이 없는 경우 빈 캐시로 초기화"""
-        empty_cache = {
-            'data': {},
-            'last_update': None
+def convert_json_keys_to_float(obj):
+    """JSON 객체의 숫자 형태의 문자열 키를 float으로 변환"""
+    if isinstance(obj, dict):
+        return {
+            float(k) if isinstance(k, str) and k.replace('.', '').isdigit() else k: convert_json_keys_to_float(v)
+            for k, v in obj.items()
         }
-        for file in self.cache_files:
-            if not os.path.exists(file):
-                with open(file, 'wb') as f:
-                    pickle.dump(empty_cache, f)
+    elif isinstance(obj, list):
+        return [convert_json_keys_to_float(item) for item in obj]
+    return obj
 
-        # active_index_file 초기화
-        if not os.path.exists(self.active_index_file):
-            with open(self.active_index_file, 'w') as f:
-                f.write('0|None')
-
-    def get_active_cache(self) -> tuple[Any, Optional[datetime]]:
-        """현재 활성화된 캐시 데이터와 마지막 업데이트 시간 반환"""
-        self._acquire_lock()
-        try:
-            with open(self.active_index_file, 'r') as f:
-                active_index, last_update_str = f.read().strip().split('|')
-                active_index = int(active_index)
-                if last_update_str == 'None':
-                    last_update = None
-                else:
-                    last_update = datetime.fromisoformat(last_update_str)
-            active_file = self.cache_files[active_index]
-            try:
-                with open(active_file, 'rb') as f:
-                    cache_data = pickle.load(f)
-                return cache_data['data'], last_update
-            except Exception as e:
-                print(f"Error reading active cache: {e}")
-                return {}, None
-        finally:
-            self._release_lock()
-
-    def update_cache(self, new_data: Any) -> bool:
-        """
-        새로운 데이터로 캐시 업데이트
-        1. 비활성 캐시에 새 데이터 쓰기
-        2. 성공하면 활성 캐시 전환
-        """
-        self._acquire_lock()
-        try:
-            with open(self.active_index_file, 'r') as f:
-                active_index, _ = f.read().strip().split('|')
-                active_index = int(active_index)
-            pending_index = 1 - active_index
-            pending_file = self.cache_files[pending_index]
-
-            try:
-                # 새 데이터를 비활성 캐시에 쓰기
-                cache_data = {
-                    'data': new_data,
-                    'last_update': datetime.now()
-                }
-                with open(pending_file, 'wb') as f:
-                    pickle.dump(cache_data, f)
-
-                # 캐시 전환
-                with open(self.active_index_file, 'w') as f:
-                    f.write(f"{pending_index}|{cache_data['last_update'].isoformat()}")
-                return True
-
-            except Exception as e:
-                print(f"Error updating cache: {e}")
-                return False
-        finally:
-            self._release_lock()
-
-    def get_last_update_time(self) -> Optional[datetime]:
-        """현재 활성화된 캐시의 마지막 업데이트 시간 반환"""
-        self._acquire_lock()
-        try:
-            with open(self.active_index_file, 'r') as f:
-                active_index, last_update_str = f.read().strip().split('|')
-                if last_update_str == 'None':
-                    return None
-                else:
-                    return datetime.fromisoformat(last_update_str)
-        finally:
-            self._release_lock()
-
-    def cleanup(self):
-        """캐시 파일 정리 (필요한 경우)"""
-        try:
-            for file in self.cache_files:
-                if os.path.exists(file):
-                    os.remove(file)
-            if os.path.exists(self.active_index_file):
-                os.remove(self.active_index_file)
-        except Exception as e:
-            print(f"Error cleaning up cache files: {e}")
-
-    def _acquire_lock(self):
-        while True:
-            try:
-                with open(self.lock_file_path, 'x'):  # 파일이 존재하지 않을 때만 생성
-                    return
-            except FileExistsError:
-                time.sleep(0.1)
-
-    def _release_lock(self):
-        os.remove(self.lock_file_path)
-
-class MarketPriceCache:
-    def __init__(self, db_manager, debug=False):
-        self.db = db_manager
+class DBMarketPriceCache:
+    def __init__(self, main_db_manager: DatabaseManager, debug: bool = False):
+        self.main_db = main_db_manager  # 기존 DB (데이터 읽기용)
+        self.cache_db = init_cache_database()  # 캐시 전용 DB
         self.debug = debug
-
-        # Double Buffer 캐시 초기화
-        self.cache_manager = DoubleBufferCache('market_price_cache')
-        
-        # 초기 캐시 데이터 구조
-        self.cache_structure = {
-            "dealer": {},
-            "support": {},
-            "bracelet_고대": {},
-            "bracelet_유물": {}
-        }
-        
-        # 캐시 로드
+        self.cache = {}  # 메모리 캐시
         self._load_cache()
 
         self.EXCLUSIVE_OPTIONS = {
@@ -184,30 +68,90 @@ class MarketPriceCache:
             "아군보호막": [0.95, 2.1, 3.5]
         }
 
-    # -----------------------------
-    # Cache Management Methods
-    # -----------------------------
-    
     def _load_cache(self):
-        """캐시 데이터 로드"""
-        self.cache, self.last_update = self.cache_manager.get_active_cache()
-        if not self.cache:  # 캐시가 비어있으면 기본 구조로 초기화
-            self.cache = self.cache_structure.copy()
+        """현재 활성화된 캐시 데이터 로드"""
+        with self.cache_db.get_read_session() as session:
+            # 활성화된 캐시 찾기
+            active_cache = session.query(MarketPriceCache).filter_by(is_active=True).first()
             
-        if self.debug:
-            print(f"Cache loaded. Last update: {self.last_update}")
-            print(f"Dealer cache entries: {len(self.cache['dealer'])}")
-            print(f"Support cache entries: {len(self.cache['support'])}")
-            print(f"고대 팔찌 cache entries: {len(self.cache['bracelet_고대'])}")
-            print(f"유물 팔찌 cache entries: {len(self.cache['bracelet_유물'])}")
+            if not active_cache:
+                if self.debug:
+                    print("No active cache found, initializing empty cache")
+                self.cache = {
+                    "dealer": {},
+                    "support": {},
+                    "bracelet_고대": {},
+                    "bracelet_유물": {}
+                }
+                return
+
+            # 악세서리 패턴 로드
+            accessory_patterns = session.query(AccessoryPricePattern).filter_by(
+                cache_id=active_cache.cache_id
+            ).all()
+
+            # 팔찌 패턴 로드
+            bracelet_patterns = session.query(BraceletPricePattern).filter_by(
+                cache_id=active_cache.cache_id
+            ).all()
+
+            # 캐시 데이터 구성
+            self.cache = {
+                "dealer": {},
+                "support": {},
+                "bracelet_고대": {},
+                "bracelet_유물": {}
+            }
+
+            # 악세서리 패턴 처리
+            for pattern in accessory_patterns:
+                cache_key = f"{pattern.grade}:{pattern.part}:{pattern.level}:{pattern.pattern_key}"
+                # JSON 로드 시 숫자 키를 float으로 변환
+                common_option_values = json.loads(pattern.common_option_values)
+                converted_values = convert_json_keys_to_float(common_option_values)
+                
+                pattern_data = {
+                    'base_price': pattern.base_price,
+                    'price_std': pattern.price_std,
+                    'quality_coefficient': pattern.quality_coefficient,
+                    'trade_count_coefficient': pattern.trade_count_coefficient,
+                    'common_option_values': converted_values,
+                    'sample_count': pattern.sample_count,
+                    'total_sample_count': pattern.total_sample_count,
+                    'last_update': active_cache.timestamp
+                }
+                
+                if pattern.role == 'dealer':
+                    self.cache['dealer'][cache_key] = pattern_data
+                else:
+                    self.cache['support'][cache_key] = pattern_data
+
+            # 팔찌 패턴 처리
+            for pattern in bracelet_patterns:
+                pattern_key = (
+                    pattern.combat_stats,
+                    pattern.base_stats,
+                    pattern.extra_slots
+                )
+                bracelet_cache_first_key = f'bracelet_{pattern.grade}'
+                try:
+                    self.cache[bracelet_cache_first_key][pattern.pattern_type][pattern_key] = pattern.price
+                except KeyError:
+                    self.cache[bracelet_cache_first_key][pattern.pattern_type] = {}
+                    self.cache[bracelet_cache_first_key][pattern.pattern_type][pattern_key] = pattern.price
+
+            if self.debug:
+                print(f"Cache loaded. Last update: {active_cache.timestamp}")
+                print(f"Dealer cache entries: {len(self.cache['dealer'])}")
+                print(f"Support cache entries: {len(self.cache['support'])}")
+                print(f"고대 팔찌 cache entries: {len(self.cache['bracelet_고대'])}")
+                print(f"유물 팔찌 cache entries: {len(self.cache['bracelet_유물'])}")
 
     def get_last_update_time(self) -> Optional[datetime]:
         """캐시의 마지막 업데이트 시간 확인"""
-        return self.cache_manager.get_last_update_time()
-
-    # -----------------------------
-    # Public Interface Methods
-    # -----------------------------
+        with self.cache_db.get_read_session() as session:
+            active_cache = session.query(MarketPriceCache).filter_by(is_active=True).first()
+            return active_cache.timestamp if active_cache else None
 
     def get_price_data(self, grade: str, part: str, level: int, 
                       options: Dict[str, List[Tuple[str, float]]]) -> Dict[str, Optional[Dict]]:
@@ -235,24 +179,93 @@ class MarketPriceCache:
 
         return cache_data
 
-    def update_cache(self):
-        """시장 가격 데이터 업데이트"""
+    def get_bracelet_price(self, grade: str, item_data: Dict) -> Optional[int]:
+        """팔찌 가격 조회"""
+        pattern_info = self._classify_bracelet_pattern(item_data)
+        # print(f"찾아진 패턴 for item {item_data}: {pattern_info}")
+        if not pattern_info:
+            return None
+
+        pattern_type, details = pattern_info
+        key = (details['pattern'], details['values'], details['extra_slots'])
+
+        # 캐시에서 해당 패턴의 가격 조회
+        cache_key = f"bracelet_{grade}"
+
+        # 1. 기본적인 캐시 존재 여부 확인
+        if cache_key not in self.cache:
+            if self.debug:
+                print(f"No cache data found for {cache_key}")
+            return None
+
+        # 2. 해당 패턴 타입의 가격 데이터 가져오기
+        pattern_prices = self.cache[cache_key].get(pattern_type, {})
+
+        # 3. 정확한 매칭 시도
+        if key in pattern_prices:
+            if self.debug:
+                print(f"\nExact pattern match found:")
+                print(f"Pattern: {pattern_type} {key}")
+                print(f"Price: {pattern_prices[key]:,}")
+            return pattern_prices[key]
+
+        # 4. 정확한 매칭이 없는 경우 비슷한 패턴 찾기
+        # (기존 비슷한 패턴 찾기 로직 유지)
+        for cached_key, price in pattern_prices.items():
+            cached_pattern, cached_values, cached_extra = cached_key
+            if (cached_pattern == details['pattern'] and 
+                cached_extra == details['extra_slots']):
+                if self._is_similar_values(cached_values, details['values'], pattern_type):
+                    if self.debug:
+                        print(f"\nSimilar pattern match found:")
+                        print(f"Original pattern: {pattern_type} {key}")
+                        print(f"Matched pattern: {pattern_type} {cached_key}")
+                        print(f"Price: {price:,}")
+                    return price
+
+        if self.debug:
+            print(f"No matching pattern found for {pattern_type} {key}")
+
+        return None
+
+    def update_cache(self, target_time: Optional[datetime] = None):
+        """
+        시장 가격 데이터 업데이트
+        
+        Args:
+            target_time: 특정 시점의 캐시를 생성하기 위한 시간. None이면 현재 시간 기준으로 생성.
+        """
         try:
-            print("\nUpdating price cache...")
-            start_time = datetime.now()
+            # 시간 설정
+            start_time = target_time if target_time else datetime.now()
+            print(f"\nUpdating price cache for {start_time}")
+            
+            # 로그 파일 설정
             timestamp = start_time.strftime("%Y%m%d_%H%M%S")
             log_filename = f'price_log/price_calculation_{timestamp}.log'
 
             with redirect_stdout(log_filename):
-                new_cache = self.cache_structure.copy()
+                new_cache = {
+                    "dealer": {},
+                    "support": {},
+                    "bracelet_고대": {},
+                    "bracelet_유물": {}
+                }
 
-                with self.db.get_read_session() as session:
-                    recent_time = datetime.now() - timedelta(hours=24)
+                with self.main_db.get_read_session() as session:  # 메인 DB에서 데이터 읽기
+                    # 24시간 데이터 범위 설정
+                    time_range_start = start_time - timedelta(hours=24)
+                    time_range_end = start_time
                     
-                    # 최근 24시간 데이터 조회
+                    print(f"Analyzing data from {time_range_start} to {time_range_end}")
+                    
+                    # 지정된 시간 범위의 데이터 조회
                     records = session.query(PriceRecord).filter(
-                        PriceRecord.timestamp >= recent_time
+                        PriceRecord.timestamp >= time_range_start,
+                        PriceRecord.timestamp <= time_range_end
                     ).all()
+
+                    print(f"Found {len(records)} records in time range")
 
                     # 딜러용/서포터용 데이터 그룹화
                     dealer_groups = {}
@@ -313,28 +326,90 @@ class MarketPriceCache:
                             price_data = self._calculate_group_prices(items, key, "support")
                             if price_data:
                                 new_cache["support"][key] = price_data
-                                
-                # 팔찌 가격 업데이트
-                for grade in ["고대", "유물"]:
-                    cache_key = f"bracelet_{grade}"
-                    new_cache[cache_key] = self._calculate_bracelet_prices(grade)
 
-            # Double Buffer 캐시 업데이트
-            if self.cache_manager.update_cache(new_cache):
-                # 업데이트 성공 시 현재 인스턴스의 캐시도 업데이트
-                self.cache = new_cache
-                self.last_update = datetime.now()
-                print(f"Cache update completed in {(datetime.now() - start_time).total_seconds():.2f} seconds")
-            else:
-                print("Cache update failed")
+                    # 팔찌 가격 업데이트
+                    for grade in ["고대", "유물"]:
+                        cache_key = f"bracelet_{grade}"
+                        new_cache[cache_key] = self._calculate_bracelet_prices(grade)
+
+                # 새로운 캐시 ID 생성
+                new_cache_id = str(uuid.uuid4())
+
+                with self.cache_db.get_write_session() as write_session:
+                    # 새 캐시 메타데이터 생성
+                    new_cache_entry = MarketPriceCache(
+                        cache_id=new_cache_id,
+                        timestamp=start_time,
+                        is_active=False  # 과거 데이터 캐시는 기본적으로 비활성 상태
+                    )
+                    write_session.add(new_cache_entry)
+                    write_session.flush()
+
+                    # 악세서리 패턴 저장
+                    for role in ['dealer', 'support']:
+                        for cache_key, pattern_data in new_cache[role].items():
+                            grade, part, level, pattern_key = cache_key.split(':')
+                            
+                            acc_pattern = AccessoryPricePattern(
+                                cache_id=new_cache_id,
+                                grade=grade,
+                                part=part,
+                                level=int(level),
+                                pattern_key=pattern_key,
+                                role=role,
+                                base_price=pattern_data['base_price'],
+                                price_std=pattern_data['price_std'],
+                                quality_coefficient=pattern_data['quality_coefficient'],
+                                trade_count_coefficient=pattern_data['trade_count_coefficient'],
+                                sample_count=pattern_data['sample_count'],
+                                total_sample_count=pattern_data['total_sample_count'],
+                                common_option_values=json.dumps(pattern_data['common_option_values'])
+                            )
+                            write_session.add(acc_pattern)
+
+                    # 팔찌 패턴 저장
+                    for grade in ['고대', '유물']:
+                        bracelet_data = new_cache[f'bracelet_{grade}']
+                        for pattern_type, patterns in bracelet_data.items():
+                            for pattern_key, price in patterns.items():
+                                combat_stats, base_stats, extra_slots = pattern_key
+                                
+                                bracelet_pattern = BraceletPricePattern(
+                                    cache_id=new_cache_id,
+                                    grade=grade,
+                                    pattern_type=pattern_type,
+                                    combat_stats=combat_stats,
+                                    base_stats=base_stats,
+                                    extra_slots=extra_slots,
+                                    price=price
+                                )
+                                write_session.add(bracelet_pattern)
+
+                    # 현재 시간 기준 업데이트인 경우에만 활성화
+                    if not target_time:
+                        # 기존 활성 캐시 비활성화
+                        write_session.query(MarketPriceCache).filter_by(is_active=True).update(
+                            {"is_active": False}
+                        )
+                        # 새 캐시 활성화
+                        new_cache_entry.is_active = True
+                        # 메모리 캐시 업데이트
+                        self.cache = new_cache
+
+                end_time = datetime.now()
+                print(f"Cache updated at {end_time}")
+                print(f"Update duration: {(end_time - start_time).total_seconds():.2f} seconds")
                 
+                return True
+
         except Exception as e:
             print(f"Error updating price cache: {e}")
             if self.debug:
                 import traceback
                 traceback.print_exc()
+            return False
 
-    def get_cache_key(self, grade: str, part: str, level: int, options: Dict[str, List[Tuple[str, float]]]) -> str:
+    def get_cache_key(self, grade: str, part: str, level: int, options: Dict[str, List[Tuple[str, float]]]) -> Tuple[str, str]:
         """캐시 키 생성 - exclusive 옵션만 사용"""
         dealer_exclusive = sorted([
             (opt[0], opt[1]) for opt in options["dealer_exclusive"]
@@ -349,6 +424,321 @@ class MarketPriceCache:
         
         return dealer_key, support_key
 
+    def _calculate_common_option_values(self, filtered_items: List[PriceRecord], exclusive_key: str, role: str):
+        """각 Common 옵션 값의 추가 가치를 계산"""
+        MIN_SAMPLES = 3
+        if len(filtered_items) < MIN_SAMPLES:
+            print(f"\nInsufficient samples for common option calculation: {len(filtered_items)} < {MIN_SAMPLES}")
+            return {}
+
+        # exclusive_key에서 정보 추출
+        grade, part, level, *_ = exclusive_key.split(':')
+
+        # 역할별 관련 옵션 정의
+        role_related_options = {
+            "dealer": ["깡공", "깡무공"],
+            "support": ["깡무공", "최생", "최마", "아군회복", "아군보호막"]
+        }
+
+        # base_items 계산 (common 옵션이 없는 아이템)
+        base_items = [item for item in filtered_items 
+                    if not any(opt.option_name in role_related_options[role] 
+                            for opt in item.raw_options)]
+
+        if not base_items:
+            print("\nNo pure base items found, using filtered items for base price")
+            prices = [item.price for item in filtered_items]
+        else:
+            print(f"\nUsing {len(base_items)} pure base items")
+            prices = [item.price for item in base_items]
+
+        sorted_prices = sorted(prices)
+        base_price = sorted_prices[1] if len(sorted_prices) > 1 else sorted_prices[0]
+        print(f"Selected base price: {base_price:,}")
+
+        values = {}
+        # 역할별 관련 옵션에 대해서만 계산
+        for opt_name in role_related_options[role]:
+            if opt_name in self.COMMON_OPTIONS:
+                print(f"\nProcessing option: {opt_name}")
+
+                values[opt_name] = {}
+                for value in self.COMMON_OPTIONS[opt_name]:
+                    matching_items = [item for item in filtered_items 
+                                    if any(opt.option_name == opt_name and 
+                                        abs(opt.option_value - value) < 0.1 
+                                        for opt in item.raw_options)]
+
+                    if matching_items:
+                        matching_prices = [item.price for item in matching_items]
+                        sorted_matching_prices = sorted(matching_prices)
+                        # min_price = sorted_matching_prices[1] if len(sorted_matching_prices) > 1 else sorted_matching_prices[0]
+                        min_price = sorted_matching_prices[1] if len(sorted_matching_prices) > 4 else base_price # 5개 이상 있어야 계산
+                        additional_value = min_price - base_price
+
+                        if additional_value > 0:
+                            values[opt_name][value] = additional_value
+                            print(f"  {opt_name} {value}: +{additional_value:,} ({len(matching_items)} samples)")
+
+        return values
+
+    def _calculate_group_prices(self, items: List[PriceRecord], exclusive_key: str, role: str) -> Optional[Dict]:
+        """그룹의 가격 통계 계산"""
+        if not items:
+            return None
+        print(f"\n=== Calculating Group Prices for {exclusive_key} ({role}) ===")
+        print(f"Total items in group: {len(items)}")
+
+        # 중복 제거
+        items = self._get_unique_items(items)
+        print(f"Total items after deduplication: {len(items)}")
+
+        # exclusive_key에서 정보 추출
+        grade, part, level, *_ = exclusive_key.split(':')
+
+        with self.main_db.get_read_session() as session:
+            # 1. 모든 관련 데이터를 한 번에 로드
+            item_ids = [item.id for item in items]
+            
+            # 아이템과 옵션 데이터를 한 번에 로드
+            query = (session.query(PriceRecord)
+                    .filter(PriceRecord.id.in_(item_ids))
+                    .outerjoin(ItemOption))
+            
+            print("\nStarting item filtering:")
+            print(f"Initial item count: {len(item_ids)}")
+
+            # 2. 메모리에서 exclusive 옵션 필터링
+            filtered_items = []
+            excluded_option_names = set()
+            
+            # 현재 검색 중인 옵션을 제외한 모든 exclusive 옵션 수집
+            for group_role in ["dealer", "support"]:
+                for exc_opt in self.EXCLUSIVE_OPTIONS[part][group_role]:
+                    if exc_opt not in exclusive_key:
+                        excluded_option_names.add(exc_opt)
+
+            # 아이템별로 옵션 검사
+            for item in items:
+                has_excluded_option = False
+                for option in item.options:
+                    if option.option_name in excluded_option_names:
+                        has_excluded_option = True
+                        break
+                if not has_excluded_option:
+                    filtered_items.append(item)
+
+            print(f"Items after exclusive option filtering: {len(filtered_items)}")
+            if len(filtered_items) < 3:
+                if self.debug:
+                    print("\nInsufficient samples after option filtering")
+                return None
+
+            # 3. 역할별 관련 옵션 정의
+            role_related_options = {
+                "dealer": ["깡공", "깡무공"],
+                "support": ["깡무공", "최생", "최마", "아군회복", "아군보호막"]
+            }
+
+            # 4. 기본 가격 계산 (common 옵션 제외)
+            base_items = [item for item in filtered_items 
+                        if not any(opt.option_name in role_related_options[role] 
+                                for opt in item.options)]
+
+            print(f"\nBase items (without common options): {len(base_items)}")
+            if base_items:
+                print("Sample base items:")
+                for item in base_items[:3]:
+                    print(f"- Price: {item.price:,}, Quality: {item.quality}, "
+                        f"Trade Count: {item.trade_count}")
+
+            prices = []
+            qualities = []
+            trade_counts = []
+
+            # base_items가 있으면 그것만 사용, 없으면 전체 사용
+            target_items = base_items if base_items else filtered_items
+            if not base_items:
+                print("\nNo pure base items found, using all items for base calculation")
+
+            for item in target_items:
+                prices.append(item.price)
+                qualities.append(item.quality)
+                trade_counts.append(item.trade_count)
+
+            # 첫 번째 단계: 두 번째로 낮은 가격을 base 가격으로 설정
+            prices = np.array(prices)
+            sorted_prices = np.sort(prices)
+
+            print(f"\nStep 1 - Before filtering:")
+            print(f"- Initial price range: {np.min(prices):,} ~ {np.max(prices):,}")
+            print(f"- Lowest prices (sorted): {sorted_prices[:5]}")  # 가장 낮은 5개 가격 출력
+
+            # base 가격 계산 (두 번째로 낮은 가격)
+            base_price = sorted_prices[1] if len(sorted_prices) > 1 else sorted_prices[0]
+            print(f"\nBase price calculation:")
+            print(f"- Second lowest price selected as base: {base_price:,}")
+
+            # 두 번째 단계: base 가격의 일정 배수 초과 제외
+            MAX_PRICE_MULTIPLIER = 5.0
+            mask = prices <= base_price * MAX_PRICE_MULTIPLIER
+            filtered_prices = prices[mask]
+            filtered_qualities = np.array(qualities)[mask]
+            filtered_trade_counts = np.array(trade_counts)[mask]
+            
+            if len(filtered_prices) < 3:
+                if self.debug:
+                    print("\nInsufficient samples after absurd price filtering")
+                return None
+
+            print(f"\nStep 2 - After removing prices > {base_price * MAX_PRICE_MULTIPLIER:,.0f} (base_price * {MAX_PRICE_MULTIPLIER}):")
+            print(f"- Final remaining samples: {len(filtered_prices)}/{len(prices)}")
+            print(f"- Final price range: {np.min(filtered_prices):,} ~ {np.max(filtered_prices):,}")
+            print(f"- Quality range: {np.min(filtered_qualities)} ~ {np.max(filtered_qualities)}")
+            print(f"- Trade count range: {np.min(filtered_trade_counts)} ~ {np.max(filtered_trade_counts)}")
+
+            # 계수 계산
+            quality_coefficient = self._calculate_quality_coefficient(filtered_prices, filtered_qualities)
+            trade_coefficient = self._calculate_trade_coefficient(filtered_prices, filtered_trade_counts)
+
+            print("\nCalculated coefficients:")
+            print(f"- Quality coefficient: {quality_coefficient:,.2f}")
+            print(f"- Trade count coefficient: {trade_coefficient:,.2f}")
+
+            # Common 옵션 값 계산
+            common_option_values = self._calculate_common_option_values(filtered_items, exclusive_key, role)
+
+            print("\nFinal price statistics:")
+            print(f"- Base price: {np.min(filtered_prices):,}")
+            print(f"- Standard deviation: {np.std(filtered_prices):,.2f}")
+            print(f"- Sample count: {len(filtered_prices)}")
+
+            return {
+                'base_price': int(np.min(filtered_prices)),
+                'price_std': float(np.std(filtered_prices)),
+                'quality_coefficient': float(max(0, quality_coefficient)),  # 품질 계수는 항상 양수
+                'trade_count_coefficient': float(min(0, trade_coefficient)),  # 거래 횟수 계수는 항상 음수
+                'common_option_values': common_option_values,
+                'sample_count': len(filtered_prices),
+                'total_sample_count': len(items),
+                'last_update': datetime.now()
+            }
+
+    def _calculate_quality_coefficient(self, prices, qualities) -> float:
+        """품질에 따른 가격 계수 계산"""
+        if len(set(qualities)) <= 1:
+            return 0
+        slope, _ = np.polyfit(qualities, prices, 1)
+        return slope
+
+    def _calculate_trade_coefficient(self, prices, trade_counts) -> float:
+        """거래 횟수에 따른 가격 계수 계산"""
+        if len(set(trade_counts)) <= 1:
+            return 0
+        slope, _ = np.polyfit(trade_counts, prices, 1)
+        return slope
+
+    def _calculate_bracelet_prices(self, grade: str) -> Dict:
+        """팔찌 패턴별 가격 계산"""
+        try:
+            print(f"\n=== Calculating Bracelet Prices for {grade} Grade ===")
+
+            with self.main_db.get_read_session() as session:
+                recent_time = datetime.now() - timedelta(hours=24)
+
+                records = session.query(BraceletPriceRecord).filter(
+                    BraceletPriceRecord.timestamp >= recent_time,
+                    BraceletPriceRecord.grade == grade
+                ).all()
+
+                print(f"Found {len(records)} records in last 24 hours before deduplication")
+
+                # 중복 제거
+                records = self._get_unique_items(records)
+                print(f"Records after deduplication: {len(records)}")
+
+                pattern_prices = {
+                    "전특2": {},
+                    "전특1+기본": {},
+                    "전특1+공이속": {},
+                    "전특1+잡옵": {},
+                    "전특1": {}
+                }
+
+                # 패턴별 카운트 추가
+                pattern_counts = {k: 0 for k in pattern_prices.keys()}
+
+                for record in records:
+                    session.refresh(record)
+
+                    item_data = {
+                        'fixed_option_count': record.fixed_option_count,
+                        'extra_option_count': record.extra_option_count,
+                        'combat_stats': [(stat.stat_type, stat.value) for stat in record.combat_stats],
+                        'base_stats': [(stat.stat_type, stat.value) for stat in record.base_stats],
+                        'special_effects': [(effect.effect_type, effect.value) for effect in record.special_effects]
+                    }
+
+                    # 디버깅을 위한 출력 추가
+                    if self.debug:
+                        print("\nProcessing record:")
+                        print(f"Fixed options: {record.fixed_option_count}")
+                        print(f"Extra options: {record.extra_option_count}")
+                        print(f"Combat stats: {item_data['combat_stats']}")
+                        print(f"Base stats: {item_data['base_stats']}")
+                        print(f"Special effects: {item_data['special_effects']}")
+
+                    pattern_info = self._classify_bracelet_pattern(item_data)
+                    if not pattern_info:
+                        if self.debug:
+                            print("No pattern found for this record")
+                        continue
+
+                    pattern_type, details = pattern_info
+                    pattern_counts[pattern_type] += 1  # 패턴 카운트 증가
+
+                    key = (details['pattern'], details['values'], details['extra_slots'])
+
+                    if pattern_type not in pattern_prices:
+                        pattern_prices[pattern_type] = {}
+
+                    if key not in pattern_prices[pattern_type]:
+                        pattern_prices[pattern_type][key] = []
+
+                    pattern_prices[pattern_type][key].append(record.price)
+
+                # 패턴별 통계 출력
+                print("\nPattern counts:")
+                for pattern_type, count in pattern_counts.items():
+                    print(f"{pattern_type}: {count}")
+
+                # 최종 가격 계산
+                result = {}
+                for pattern_type, patterns in pattern_prices.items():
+                    print(f"\nProcessing {pattern_type} patterns:")
+
+                    result[pattern_type] = {}
+                    for key, prices in patterns.items():
+                        if len(prices) >= 2:
+                            sorted_prices = sorted(prices)
+                            selected_price = sorted_prices[1]
+
+                            print(f"\n  Pattern {key}:")
+                            print(f"  - Total samples: {len(prices)}")
+                            print(f"  - Price range: {min(prices):,} ~ {max(prices):,}")
+                            print(f"  - Selected price: {selected_price:,}")
+
+                            result[pattern_type][key] = selected_price
+
+                return result
+
+        except Exception as e:
+            print(f"Error calculating bracelet prices: {e}")
+            if self.debug:
+                import traceback
+                traceback.print_exc()
+            return {}
+
     def _classify_bracelet_pattern(self, item_data: Dict) -> Tuple[str, Dict]:
         """팔찌 패턴 분류 및 키 생성"""
         fixed_count = item_data['fixed_option_count']
@@ -356,7 +746,7 @@ class MarketPriceCache:
         combat_stats = [(stat, value) for stat, value in item_data['combat_stats']]
         base_stats = [(stat, value) for stat, value in item_data['base_stats']]
         special_effects = [(effect, value) for effect, value in item_data['special_effects']]
-        
+
         # 디버깅을 위한 출력 추가
         if self.debug:
             print("\nClassifying bracelet pattern:")
@@ -365,13 +755,13 @@ class MarketPriceCache:
             print(f"Base stats: {base_stats}")
             print(f"Special effects: {special_effects}")
             print(f"Extra slots: {extra_slots}")
-        
+
         # 고정 효과 2개인 경우
         if fixed_count == 2:
             # 디버깅을 위한 출력
             if self.debug:
                 print("Checking fixed count 2 patterns")
-                
+
             if len(combat_stats) == 2:  # 전특 2개
                 if self.debug:
                     print("Found 전특2 pattern")
@@ -401,7 +791,7 @@ class MarketPriceCache:
             elif len(combat_stats) == 1:  # 전특1+공이속 또는 전특1+잡옵
                 if self.debug:
                     print(f"Checking 전특1 patterns with special effects: {special_effects}")
-                
+
                 if any(effect.strip() == "공격 및 이동 속도 증가" for (effect, _) in special_effects):
                     if self.debug:
                         print("Found 전특1+공이속 pattern")
@@ -426,7 +816,7 @@ class MarketPriceCache:
                             "extra_slots": f"부여{extra_slots}"
                         }
                     )
-        
+
         # 고정 효과 1개인 경우
         elif fixed_count == 1 and len(combat_stats) == 1:
             if self.debug:
@@ -440,7 +830,7 @@ class MarketPriceCache:
                     "extra_slots": f"부여{extra_slots}"
                 }
             )
-        
+
         if self.debug:
             print("No matching pattern found")
         return None
@@ -461,401 +851,6 @@ class MarketPriceCache:
                 return thresholds[max(0, thresholds.index(threshold) - 1)]
         return thresholds[-1]
 
-    def _calculate_common_option_values(self, filtered_items: List[PriceRecord], exclusive_key: str, role: str):
-        """각 Common 옵션 값의 추가 가치를 계산"""
-        MIN_SAMPLES = 3
-        if len(filtered_items) < MIN_SAMPLES:
-            print(f"\nInsufficient samples for common option calculation: {len(filtered_items)} < {MIN_SAMPLES}")
-            return {}
-
-        # exclusive_key에서 정보 추출
-        grade, part, level, *_ = exclusive_key.split(':')
-        
-        # 역할별 관련 옵션 정의
-        role_related_options = {
-            "dealer": ["깡공", "깡무공"],
-            "support": ["깡무공", "최생", "최마", "아군회복", "아군보호막"]
-        }
-
-        # base_items 계산 (common 옵션이 없는 아이템)
-        base_items = [item for item in filtered_items 
-                    if not any(opt.option_name in role_related_options[role] 
-                            for opt in item.raw_options)]
-
-        if not base_items:
-            print("\nNo pure base items found, using filtered items for base price")
-            prices = [item.price for item in filtered_items]
-        else:
-            print(f"\nUsing {len(base_items)} pure base items")
-            prices = [item.price for item in base_items]
-
-        sorted_prices = sorted(prices)
-        base_price = sorted_prices[1] if len(sorted_prices) > 1 else sorted_prices[0]
-        print(f"Selected base price: {base_price:,}")
-
-        values = {}
-        # 역할별 관련 옵션에 대해서만 계산
-        for opt_name in role_related_options[role]:
-            if opt_name in self.COMMON_OPTIONS:
-                print(f"\nProcessing option: {opt_name}")
-                
-                values[opt_name] = {}
-                for value in self.COMMON_OPTIONS[opt_name]:
-                    matching_items = [item for item in filtered_items 
-                                    if any(opt.option_name == opt_name and 
-                                        abs(opt.option_value - value) < 0.1 
-                                        for opt in item.raw_options)]
-                    
-                    if matching_items:
-                        matching_prices = [item.price for item in matching_items]
-                        sorted_matching_prices = sorted(matching_prices)
-                        # min_price = sorted_matching_prices[1] if len(sorted_matching_prices) > 1 else sorted_matching_prices[0]
-                        min_price = sorted_matching_prices[1] if len(sorted_matching_prices) > 4 else base_price # 5개 이상 있어야 계산
-                        additional_value = min_price - base_price
-                        
-                        if additional_value > 0:
-                            values[opt_name][value] = additional_value
-                            print(f"  {opt_name} {value}: +{additional_value:,} ({len(matching_items)} samples)")
-
-        return values
-               
-    def _extract_dealer_options(self, record: PriceRecord) -> List[Tuple[str, float]]:
-        """딜러용 주요 옵션 추출"""
-        dealer_options = []
-        
-        for opt in record.raw_options:
-            if opt.option_name in ["깨달음", "도약"]:
-                continue
-                
-            # 부위별 전용 옵션
-            if ((record.part == "목걸이" and opt.option_name in ["추피", "적주피"]) or
-                (record.part == "귀걸이" and opt.option_name in ["공퍼", "무공퍼"]) or
-                (record.part == "반지" and opt.option_name in ["치적", "치피"])):
-                dealer_options.append((opt.option_name, opt.option_value))
-                
-            # 딜러 공통 옵션
-            elif opt.option_name in ["깡무공", "깡공"]:
-                dealer_options.append((opt.option_name, opt.option_value))
-
-        return dealer_options
-
-    def _extract_support_options(self, record: PriceRecord) -> List[Tuple[str, float]]:
-        """서포터용 주요 옵션 추출"""
-        support_options = []
-        
-        for opt in record.raw_options:
-            if opt.option_name in ["깨달음", "도약"]:
-                continue
-                
-            # 부위별 전용 옵션
-            if ((record.part == "목걸이" and opt.option_name in ["아덴게이지", "낙인력"]) or
-                (record.part == "귀걸이" and opt.option_name in ["무공퍼"]) or
-                (record.part == "반지" and opt.option_name in ["아공강", "아피강"])):
-                support_options.append((opt.option_name, opt.option_value))
-                
-            # 서포터 공통 옵션
-            elif opt.option_name in ["깡무공", "최생", "최마", "아군보호막", "아군회복"]:
-                support_options.append((opt.option_name, opt.option_value))
-
-        return support_options
-
-    def _calculate_group_prices(self, items: List[PriceRecord], exclusive_key: str, role: str) -> Optional[Dict]:
-        """그룹의 가격 통계 계산"""
-        if not items:
-            return None
-        print(f"\n=== Calculating Group Prices for {exclusive_key} ({role}) ===")
-        print(f"Total items in group: {len(items)}")
-
-        # 중복 제거
-        items = self._get_unique_items(items)
-        print(f"Total items after deduplication: {len(items)}")
-        
-        # exclusive_key에서 정보 추출
-        grade, part, level, *_ = exclusive_key.split(':')
-
-        with self.db.get_read_session() as session:
-            # 아이템들의 ID 목록
-            item_ids = [item.id for item in items]
-            
-            print("\nStarting item filtering:")
-            print(f"Initial item count: {len(item_ids)}")
-
-            query = session.query(PriceRecord).filter(
-                PriceRecord.id.in_(item_ids)
-            )
-
-            initial_count = query.count()
-            print(f"Items after initial filter: {initial_count}")
-
-            # 같은 exclusive 그룹의 다른 옵션들이 없는 아이템만 선택
-            for group_role in ["dealer", "support"]:
-                for exc_opt in self.EXCLUSIVE_OPTIONS[part][group_role]:
-                    # 현재 검색 중인 옵션은 건너뛰기
-                    if exc_opt in exclusive_key:
-                        continue
-                    # 다른 exclusive 옵션이 있는 아이템 제외
-                    subq = (session.query(ItemOption.price_record_id)
-                        .filter(ItemOption.option_name == exc_opt)
-                        .scalar_subquery())
-
-                    query = query.filter(~PriceRecord.id.in_(subq))
-
-                    count_after = query.count()
-                    print(f"Items after excluding {exc_opt}: {count_after}")
-
-            filtered_items = query.all()
-            print(f"\nItems after exclusive option filtering: {len(filtered_items)}")
-
-            role_related_options = {
-                "dealer": ["깡공", "깡무공"],
-                "support": ["깡무공", "최생", "최마", "아군회복", "아군보호막"]
-            }
-
-            # 기본 가격 계산 (common 옵션 제외)
-            base_items = [item for item in items 
-                        if not any(opt.option_name in role_related_options[role] 
-                                for opt in item.raw_options)]
-        
-            print(f"\nBase items (without common options): {len(base_items)}")
-            if base_items:
-                print("Sample base items:")
-                for item in base_items[:3]:
-                    print(f"- Price: {item.price:,}, Quality: {item.quality}, "
-                        f"Trade Count: {item.trade_count}")
-        
-            prices = []
-            qualities = []
-            trade_counts = []
-
-            # base_items가 있으면 그것만 사용, 없으면 전체 사용
-            target_items = base_items if base_items else filtered_items
-            if not base_items:
-                print("\nNo pure base items found, using all items for base calculation")
-        
-            for item in target_items:
-                prices.append(item.price)
-                qualities.append(item.quality)
-                trade_counts.append(item.trade_count)
-
-            # 첫 번째 단계: 두 번째로 낮은 가격을 base 가격으로 설정
-            prices = np.array(prices)
-            sorted_prices = np.sort(prices)
-        
-            print(f"\nStep 1 - Before filtering:")
-            print(f"- Initial price range: {np.min(prices):,} ~ {np.max(prices):,}")
-            print(f"- Lowest prices (sorted): {sorted_prices[:5]}")  # 가장 낮은 5개 가격 출력
-        
-            # base 가격 계산 (두 번째로 낮은 가격)
-            base_price = sorted_prices[1] if len(sorted_prices) > 1 else sorted_prices[0]
-            print(f"\nBase price calculation:")
-            print(f"- Second lowest price selected as base: {base_price:,}")
-
-            # 두 번째 단계: base 가격의 일정 배수 초과 제외
-            MAX_PRICE_MULTIPLIER = 5.0
-            mask = prices <= base_price * MAX_PRICE_MULTIPLIER
-            filtered_prices = prices[mask]
-            filtered_qualities = np.array(qualities)[mask]
-            filtered_trade_counts = np.array(trade_counts)[mask]
-
-            print(f"\nStep 2 - After removing prices > {base_price * MAX_PRICE_MULTIPLIER:,.0f} (base_price * {MAX_PRICE_MULTIPLIER}):")
-            print(f"- Final remaining samples: {len(filtered_prices)}/{len(prices)}")
-            print(f"- Final price range: {np.min(filtered_prices):,} ~ {np.max(filtered_prices):,}")
-            print(f"- Quality range: {np.min(filtered_qualities)} ~ {np.max(filtered_qualities)}")
-            print(f"- Trade count range: {np.min(filtered_trade_counts)} ~ {np.max(filtered_trade_counts)}")
-    
-            if len(filtered_prices) < 3:
-                print("\nInsufficient samples after filtering")
-                return None
-
-            # 계수 계산
-            quality_coefficient = self._calculate_quality_coefficient(filtered_prices, filtered_qualities)
-            trade_coefficient = self._calculate_trade_coefficient(filtered_prices, filtered_trade_counts)
-
-            print("\nCalculated coefficients:")
-            print(f"- Quality coefficient: {quality_coefficient:,.2f}")
-            print(f"- Trade count coefficient: {trade_coefficient:,.2f}")
-
-            # Common 옵션 값 계산
-            common_option_values = self._calculate_common_option_values(filtered_items, exclusive_key, role)
-
-            print("\nFinal price statistics:")
-            print(f"- Base price: {np.min(filtered_prices):,}")
-            print(f"- Standard deviation: {np.std(filtered_prices):,.2f}")
-            print(f"- Sample count: {len(filtered_prices)}")
-
-            return {
-                'base_price': np.min(filtered_prices),
-                'price_std': np.std(filtered_prices),
-                'quality_coefficient': max(0, quality_coefficient),  # 품질 계수는 항상 양수
-                'trade_count_coefficient': min(0, trade_coefficient),  # 거래 횟수 계수는 항상 음수
-                'common_option_values': common_option_values,
-                'sample_count': len(filtered_prices),
-                'total_sample_count': len(items),
-                'last_update': datetime.now()
-            }
-
-    def _calculate_quality_coefficient(self, prices, qualities) -> float:
-        """품질에 따른 가격 계수 계산"""
-        if len(set(qualities)) <= 1:
-            return 0
-        slope, _ = np.polyfit(qualities, prices, 1)
-        return slope
-
-    def _calculate_trade_coefficient(self, prices, trade_counts) -> float:
-        """거래 횟수에 따른 가격 계수 계산"""
-        if len(set(trade_counts)) <= 1:
-            return 0
-        slope, _ = np.polyfit(trade_counts, prices, 1)
-        return slope
-    
-    def _calculate_bracelet_prices(self, grade: str) -> Dict:
-        """팔찌 패턴별 가격 계산"""
-        try:
-            print(f"\n=== Calculating Bracelet Prices for {grade} Grade ===")
-            
-            with self.db.get_read_session() as session:
-                recent_time = datetime.now() - timedelta(hours=24)
-                
-                records = session.query(BraceletPriceRecord).filter(
-                    BraceletPriceRecord.timestamp >= recent_time,
-                    BraceletPriceRecord.grade == grade
-                ).all()
-
-                print(f"Found {len(records)} records in last 24 hours before deduplication")
-                
-                # 중복 제거
-                records = self._get_unique_items(records)
-                print(f"Records after deduplication: {len(records)}")
-
-                pattern_prices = {
-                    "전특2": {},
-                    "전특1+기본": {},
-                    "전특1+공이속": {},
-                    "전특1+잡옵": {},
-                    "전특1": {}
-                }
-
-                # 패턴별 카운트 추가
-                pattern_counts = {k: 0 for k in pattern_prices.keys()}
-
-                for record in records:
-                    session.refresh(record)
-                    
-                    item_data = {
-                        'fixed_option_count': record.fixed_option_count,
-                        'extra_option_count': record.extra_option_count,
-                        'combat_stats': [(stat.stat_type, stat.value) for stat in record.combat_stats],
-                        'base_stats': [(stat.stat_type, stat.value) for stat in record.base_stats],
-                        'special_effects': [(effect.effect_type, effect.value) for effect in record.special_effects]
-                    }
-
-                    # 디버깅을 위한 출력 추가
-                    print("\nProcessing record:")
-                    print(f"Fixed options: {record.fixed_option_count}")
-                    print(f"Extra options: {record.extra_option_count}")
-                    print(f"Combat stats: {item_data['combat_stats']}")
-                    print(f"Base stats: {item_data['base_stats']}")
-                    print(f"Special effects: {item_data['special_effects']}")
-
-                    pattern_info = self._classify_bracelet_pattern(item_data)
-                    if not pattern_info:
-                        print("No pattern found for this record")
-                        continue
-
-                    pattern_type, details = pattern_info
-                    pattern_counts[pattern_type] += 1  # 패턴 카운트 증가
-                    
-                    key = (details['pattern'], details['values'], details['extra_slots'])
-                    
-                    if pattern_type not in pattern_prices:
-                        pattern_prices[pattern_type] = {}
-                    
-                    if key not in pattern_prices[pattern_type]:
-                        pattern_prices[pattern_type][key] = []
-                    
-                    pattern_prices[pattern_type][key].append(record.price)
-
-                # 패턴별 통계 출력
-                print("\nPattern counts:")
-                for pattern_type, count in pattern_counts.items():
-                    print(f"{pattern_type}: {count}")
-
-                # 최종 가격 계산
-                result = {}
-                for pattern_type, patterns in pattern_prices.items():
-                    print(f"\nProcessing {pattern_type} patterns:")
-                        
-                    result[pattern_type] = {}
-                    for key, prices in patterns.items():
-                        if len(prices) >= 2:
-                            sorted_prices = sorted(prices)
-                            selected_price = sorted_prices[1]
-                            
-                            print(f"\n  Pattern {key}:")
-                            print(f"  - Total samples: {len(prices)}")
-                            print(f"  - Price range: {min(prices):,} ~ {max(prices):,}")
-                            print(f"  - Selected price: {selected_price:,}")
-                            
-                            result[pattern_type][key] = selected_price
-
-                return result
-
-        except Exception as e:
-            print(f"Error calculating bracelet prices: {e}")
-            if self.debug:
-                import traceback
-                traceback.print_exc()
-            return {}
-
-    def get_bracelet_price(self, grade: str, item_data: Dict) -> Optional[int]:
-        """팔찌 가격 조회"""
-        pattern_info = self._classify_bracelet_pattern(item_data)
-        # print(f"찾아진 패턴 for item {item_data}: {pattern_info}")
-        if not pattern_info:
-            return None
-
-        pattern_type, details = pattern_info
-        key = (details['pattern'], details['values'], details['extra_slots'])
-
-        # 캐시에서 해당 패턴의 가격 조회
-        cache_key = f"bracelet_{grade}"
-
-        # 1. 기본적인 캐시 존재 여부 확인
-        if cache_key not in self.cache:
-            if self.debug:
-                print(f"No cache data found for {cache_key}")
-            return None
-
-        # 2. 해당 패턴 타입의 가격 데이터 가져오기
-        pattern_prices = self.cache[cache_key].get(pattern_type, {})
-
-        # 3. 정확한 매칭 시도
-        if key in pattern_prices:
-            if self.debug:
-                print(f"\nExact pattern match found:")
-                print(f"Pattern: {pattern_type} {key}")
-                print(f"Price: {pattern_prices[key]:,}")
-            return pattern_prices[key]
-
-        # 4. 정확한 매칭이 없는 경우 비슷한 패턴 찾기
-        # (기존 비슷한 패턴 찾기 로직 유지)
-        for cached_key, price in pattern_prices.items():
-            cached_pattern, cached_values, cached_extra = cached_key
-            if (cached_pattern == details['pattern'] and 
-                cached_extra == details['extra_slots']):
-                if self._is_similar_values(cached_values, details['values'], pattern_type):
-                    if self.debug:
-                        print(f"\nSimilar pattern match found:")
-                        print(f"Original pattern: {pattern_type} {key}")
-                        print(f"Matched pattern: {pattern_type} {cached_key}")
-                        print(f"Price: {price:,}")
-                    return price
-
-        if self.debug:
-            print(f"No matching pattern found for {pattern_type} {key}")
-
-        return None
-
     def _is_similar_values(self, cached_values: str, target_values: str, pattern_type: str = None) -> bool:
         """
         값들이 충분히 비슷한지 확인
@@ -866,26 +861,26 @@ class MarketPriceCache:
                 print(f"\nComparing values for pattern {pattern_type}:")
                 print(f"Cached values: {cached_values}")
                 print(f"Target values: {target_values}")
-                
+
             # 전특1+기본 패턴의 경우
             if pattern_type == "전특1+기본":
                 if '+' not in cached_values or '+' not in target_values:
                     return False
-                    
+
                 cached_v1, cached_v2 = map(float, cached_values.split('+'))
                 target_v1, target_v2 = map(float, target_values.split('+'))
-                
+
                 # 첫 번째 값은 전투특성(10), 두 번째 값은 기본스탯(1600)
                 combat_similar = abs(cached_v1 - target_v1) <= 10
                 base_similar = abs(cached_v2 - target_v2) <= 1600
-                
+
                 if self.debug:
                     print(f"Combat stat comparison: {cached_v1} vs {target_v1} (diff: {abs(cached_v1 - target_v1)})")
                     print(f"Base stat comparison: {cached_v2} vs {target_v2} (diff: {abs(cached_v2 - target_v2)})")
                     print(f"Results - Combat: {combat_similar}, Base: {base_similar}")
-                
+
                 return combat_similar and base_similar
-                
+
             # 그 외 패턴들 (전투특성만 있는 경우)
             elif '+' in cached_values and '+' in target_values:
                 cached_v1, cached_v2 = map(float, cached_values.split('+'))
@@ -896,7 +891,7 @@ class MarketPriceCache:
                 cached_v = float(cached_values)
                 target_v = float(target_values)
                 return abs(cached_v - target_v) <= 10
-                
+
         except Exception as e:
             if self.debug:
                 print(f"Error comparing values: {e}")
@@ -921,7 +916,7 @@ class MarketPriceCache:
                     for opt in item.raw_options 
                     if opt.option_name not in ["깨달음", "도약"]
                 ))
-            
+
             key = (
                 item.grade,
                 item.name, 
@@ -932,9 +927,9 @@ class MarketPriceCache:
                 item.trade_count,
                 option_tuple
             )
-            
+
             # 이미 있는 매물이면 타임스탬프 비교해서 최신 것만 유지
             if key not in unique_items or item.timestamp > unique_items[key].timestamp:
                 unique_items[key] = item
-        
+
         return list(unique_items.values())

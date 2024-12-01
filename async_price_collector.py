@@ -2,7 +2,7 @@ from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime, timedelta
 import asyncio
 from async_api_client import TokenBatchRequester
-from market_price_cache import MarketPriceCache
+from market_price_cache import DBMarketPriceCache
 from itertools import combinations, product
 from database import *
 from utils import *
@@ -61,6 +61,7 @@ def _create_bracelet_hash_key(item_data: dict) -> tuple:
 class AsyncPriceCollector:
     def __init__(self, db_manager: DatabaseManager, tokens: List[str]):
         self.db = db_manager
+        self.cache = DBMarketPriceCache(self.db)
         self.requester = TokenBatchRequester(tokens)
         self.current_cycle_id = None
         self.ITEMS_PER_PAGE = 10
@@ -121,8 +122,7 @@ class AsyncPriceCollector:
             
             if total_collected > 0:
                 # 캐시 업데이트
-                cache = MarketPriceCache(self.db)
-                cache.update_cache()
+                self.cache.update_cache()
                 print(f"Cache updated at {datetime.now()}")
                 
         except Exception as e:
@@ -270,16 +270,20 @@ class AsyncPriceCollector:
         return str(hash(str(preset)))
 
     def _get_next_run_time(self) -> datetime:
-        """다음 실행 시간 계산 (짝수 시간)"""
+        """Calculate the next run time (every 30 minutes)"""
         now = datetime.now()
-        if now.hour >= 22:  # 22시 이후면 다음날 0시
-            next_run = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        
+        if now.minute >= 30:
+            # If it's past 30 minutes, go to the next hour
+            next_run = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
         else:
-            next_hour = now.hour + (2 - now.hour % 2)  # 다음 짝수 시간
-            next_run = now.replace(hour=next_hour, minute=0, second=0, microsecond=0)
+            # Otherwise, go to the next 30 minutes
+            next_run = now.replace(minute=30, second=0, microsecond=0)
             
         if next_run <= now:
-            next_run += timedelta(hours=2)
+            # If the next run time is in the past, go to the next 30 minutes
+            next_run += timedelta(minutes=30)
+            
         return next_run
 
     def process_acc_response(self, response, grade, part):

@@ -19,23 +19,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def parse_search_cycle_id(search_cycle_id: str) -> datetime:
+    """YYYYMMDD_HHMM 형식의 search_cycle_id를 datetime으로 변환"""
+    return datetime.strptime(search_cycle_id, "%Y%m%d_%H%M")
+
+def get_search_cycle_id_range(range_str: str) -> str:
+    """시간 범위에 따른 search_cycle_id 기준값 계산"""
+    now = datetime.now()
+    if range_str == "1d":
+        start_time = now - timedelta(days=1)
+    elif range_str == "1w":
+        start_time = now - timedelta(weeks=1)
+    elif range_str == "1m":
+        start_time = now - timedelta(days=30)
+    else:  # all
+        start_time = datetime(2000, 1, 1)
+    
+    return start_time.strftime("%Y%m%d_%H%M")
+
 class DataService:
     def __init__(self):
         self.cache_db = init_cache_database()
-
-    def get_time_range(self, range_str: str) -> datetime:
-        """시간 범위 문자열을 datetime으로 변환"""
-        now = datetime.now()
-        if range_str == "1d":
-            return now - timedelta(days=1)
-        elif range_str == "1w":
-            return now - timedelta(weeks=1)
-        elif range_str == "1m":
-            return now - timedelta(days=30)
-        elif range_str == "3m":
-            return now - timedelta(days=90)
-        else:
-            return now - timedelta(days=1)  # 기본값 1일
 
     def get_price_trends(self, 
                         role: Optional[str] = None, 
@@ -44,19 +48,19 @@ class DataService:
                         time_range: str = "1d") -> Dict:
         """가격 추이 데이터 조회"""
         with self.cache_db.get_read_session() as session:
-            # 시간 범위 설정
-            start_time = self.get_time_range(time_range)
+            # search_cycle_id 범위 설정
+            start_search_cycle_id = get_search_cycle_id_range(time_range)
             
             # 기본 쿼리 구성
             cache_entries = session.query(MarketPriceCache)\
-                .filter(MarketPriceCache.timestamp >= start_time)\
-                .order_by(MarketPriceCache.timestamp.asc())\
+                .filter(MarketPriceCache.search_cycle_id >= start_search_cycle_id)\
+                .order_by(MarketPriceCache.search_cycle_id.asc())\
                 .all()
 
             trends = {}
             for cache in cache_entries:
-                # 타임스탬프를 밀리초 단위로 변환 (JavaScript Date 객체용)
-                timestamp = int(cache.timestamp.timestamp() * 1000)
+                # search_cycle_id를 datetime으로 변환 후 타임스탬프로
+                timestamp = int(parse_search_cycle_id(cache.search_cycle_id).timestamp() * 1000)
                 
                 # 필터 조건 구성
                 filters = {}
@@ -100,7 +104,6 @@ class DataService:
 
     def _optimize_time_series(self, data: List[Dict]) -> List[Dict]:
         """시계열 데이터 최적화"""
-        # 데이터 포인트가 너무 많을 경우 다운샘플링
         if len(data) <= 1000:  # 임계값
             return data
 

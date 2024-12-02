@@ -228,21 +228,20 @@ class DBMarketPriceCache:
 
         return None
 
-    def update_cache(self, target_time: Optional[datetime] = None):
+    def update_cache(self, search_cycle_id: str) -> bool:
         """
-        시장 가격 데이터 업데이트
+        특정 search_cycle의 시장 가격 데이터로 캐시 업데이트
         
         Args:
-            target_time: 특정 시점의 캐시를 생성하기 위한 시간. None이면 현재 시간 기준으로 생성.
+            search_cycle_id: 캐시를 생성할 search_cycle의 ID
+            
+        Returns:
+            bool: 캐시 업데이트 성공 여부
         """
         try:
-            # 시간 설정
-            start_time = target_time if target_time else datetime.now()
-            print(f"\nUpdating price cache for {start_time}")
-            
             # 로그 파일 설정
-            timestamp = start_time.strftime("%Y%m%d_%H%M%S")
-            log_filename = f'price_log/price_calculation_{timestamp}.log'
+            print(f"\nUpdating price cache for search cycle {search_cycle_id}")
+            log_filename = f'price_log/price_calculation_{search_cycle_id}.log'
 
             with redirect_stdout(log_filename):
                 new_cache = {
@@ -252,20 +251,25 @@ class DBMarketPriceCache:
                     "bracelet_유물": {}
                 }
 
-                with self.main_db.get_read_session() as session:  # 메인 DB에서 데이터 읽기
-                    # 24시간 데이터 범위 설정
-                    time_range_start = start_time - timedelta(hours=24)
-                    time_range_end = start_time
+                with self.main_db.get_read_session() as session:
+                    # 해당 search_cycle의 timestamp 조회
+                    cycle_info = session.query(PriceRecord.timestamp)\
+                        .filter(PriceRecord.search_cycle_id == search_cycle_id)\
+                        .first()
                     
-                    print(f"Analyzing data from {time_range_start} to {time_range_end}")
+                    if not cycle_info:
+                        print(f"No data found for search cycle {search_cycle_id}")
+                        return False
+                        
+                    cycle_timestamp = cycle_info.timestamp
+                    print(f"Processing data from search cycle at {cycle_timestamp}")
                     
-                    # 지정된 시간 범위의 데이터 조회
-                    records = session.query(PriceRecord).filter(
-                        PriceRecord.timestamp >= time_range_start,
-                        PriceRecord.timestamp <= time_range_end
-                    ).all()
+                    # 해당 search_cycle의 데이터 조회
+                    records = session.query(PriceRecord)\
+                        .filter(PriceRecord.search_cycle_id == search_cycle_id)\
+                        .all()
 
-                    print(f"Found {len(records)} records in time range")
+                    print(f"Found {len(records)} records in search cycle")
 
                     # 딜러용/서포터용 데이터 그룹화
                     dealer_groups = {}
@@ -336,12 +340,25 @@ class DBMarketPriceCache:
                 new_cache_id = str(uuid.uuid4())
 
                 with self.cache_db.get_write_session() as write_session:
+                    # 가장 최근 search_cycle인지 확인
+                    latest_cycle = session.query(PriceRecord.search_cycle_id)\
+                        .order_by(PriceRecord.timestamp.desc())\
+                        .first()
+                    is_latest = (latest_cycle.search_cycle_id == search_cycle_id)
+
                     # 새 캐시 메타데이터 생성
                     new_cache_entry = MarketPriceCache(
                         cache_id=new_cache_id,
-                        timestamp=start_time,
-                        is_active=False  # 과거 데이터 캐시는 기본적으로 비활성 상태
+                        search_cycle_id=search_cycle_id,  # timestamp 대신 search_cycle_id 사용
+                        is_active=is_latest
                     )
+                    write_session.add(new_cache_entry)
+
+                    if is_latest:
+                        # 기존 활성 캐시 비활성화
+                        write_session.query(MarketPriceCache).filter_by(is_active=True).update(
+                            {"is_active": False}
+                        )
                     write_session.add(new_cache_entry)
                     write_session.flush()
 
@@ -385,21 +402,8 @@ class DBMarketPriceCache:
                                 )
                                 write_session.add(bracelet_pattern)
 
-                    # 현재 시간 기준 업데이트인 경우에만 활성화
-                    if not target_time:
-                        # 기존 활성 캐시 비활성화
-                        write_session.query(MarketPriceCache).filter_by(is_active=True).update(
-                            {"is_active": False}
-                        )
-                        # 새 캐시 활성화
-                        new_cache_entry.is_active = True
-                        # 메모리 캐시 업데이트
-                        self.cache = new_cache
 
-                end_time = datetime.now()
-                print(f"Cache updated at {end_time}")
-                print(f"Update duration: {(end_time - start_time).total_seconds():.2f} seconds")
-                
+                print(f"Cache created with ID {new_cache_id} for search cycle {search_cycle_id}")
                 return True
 
         except Exception as e:

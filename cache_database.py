@@ -13,7 +13,7 @@ class MarketPriceCache(CacheBase):
     
     id = Column(Integer, primary_key=True)
     cache_id = Column(String, nullable=False, unique=True)
-    timestamp = Column(DateTime, nullable=False)
+    search_cycle_id = Column(String, nullable=False)  # timestamp를 search_cycle_id로 변경
     is_active = Column(Boolean, nullable=False, default=False)
     
     accessory_patterns = relationship("AccessoryPricePattern", back_populates="cache")

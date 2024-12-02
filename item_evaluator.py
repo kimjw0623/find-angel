@@ -30,15 +30,13 @@ class ItemEvaluator:
                 # 캐시 파일이 더 최신이면 리로드
                 if (cache_update_time and 
                     (not self.last_check_time or cache_update_time > self.last_check_time)):
-                    if self.debug:
-                        print(f"New cache update detected: {cache_update_time}")
+                    print(f"New cache update detected: {cache_update_time}")
                     
                     # 캐시 리로드
                     self.price_cache._load_cache()
                     self.last_check_time = cache_update_time
                     
-                    if self.debug:
-                        print("Cache reloaded successfully")
+                    print("Cache reloaded successfully")
             
             except Exception as e:
                 if self.debug:

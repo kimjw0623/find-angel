@@ -609,12 +609,12 @@ class DBMarketPriceCache:
             common_option_values = self._calculate_common_option_values(filtered_items, exclusive_key, role)
 
             print("\nFinal price statistics:")
-            print(f"- Base price: {np.min(filtered_prices):,}")
+            print(f"- Base price: {base_price:,}")
             print(f"- Standard deviation: {np.std(filtered_prices):,.2f}")
             print(f"- Sample count: {len(filtered_prices)}")
 
             return {
-                'base_price': int(np.min(filtered_prices)),
+                'base_price': int(base_price),
                 'price_std': float(np.std(filtered_prices)),
                 'quality_coefficient': float(max(0, quality_coefficient)),  # 품질 계수는 항상 양수
                 'trade_count_coefficient': float(min(0, trade_coefficient)),  # 거래 횟수 계수는 항상 음수

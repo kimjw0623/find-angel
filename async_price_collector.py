@@ -75,7 +75,7 @@ class AsyncPriceCollector:
             try:
                 # 다음 실행 시간까지 대기
                 next_run = self._get_next_run_time()
-                wait_seconds = (next_run - datetime.now()).total_seconds()
+                wait_seconds = (next_run - datetime.now()).total_seconds() + 2 # 안전하게 2초 추가
                 if wait_seconds > 0:
                     print(f"다음 실행 시간: {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
                     print(f"대기 중... ({int(wait_seconds)}초)")
@@ -122,7 +122,7 @@ class AsyncPriceCollector:
             
             if total_collected > 0:
                 # 캐시 업데이트
-                self.cache.update_cache()
+                self.cache.update_cache(self.current_cycle_id)
                 print(f"Cache updated at {datetime.now()}")
                 
         except Exception as e:

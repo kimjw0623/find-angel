@@ -4,7 +4,7 @@ import json
 import time
 from queue import Empty
 import os
-import utils, price_collector
+import utils, async_price_collector
 
 
 RESET = "\\u001b[0m"
@@ -171,7 +171,7 @@ def patch_message(url, message_id, content):
     requests.patch(url + f"/messages/{message_id}", headers=headers, data=data)
 
 def create_search_query(item, evaluation):
-    spg = price_collector.SearchPresetGenerator()
+    spg = async_price_collector.SearchPresetGenerator()
     
     preset = {}
     if "팔찌" in item["Name"]:

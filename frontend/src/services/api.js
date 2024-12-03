@@ -61,6 +61,35 @@ class ApiClient {
     }
   }
 
+    // 팔찌 가격 추이 데이터 조회
+  async getBraceletTrends(params = {}) {
+    const { grade, timeRange = '1d' } = params;
+    try {
+      const queryParams = new URLSearchParams();
+      if (grade) queryParams.append('grade', grade);
+      queryParams.append('time_range', timeRange);
+
+      return await this.client.get(`/bracelet-trends?${queryParams.toString()}`);
+    } catch (error) {
+      console.error('Failed to fetch bracelet trends:', error);
+      throw error;
+    }
+  }
+
+  // 팔찌 패턴 데이터 조회
+  async getBraceletPatterns(params = {}) {
+    const { grade } = params;
+    try {
+      const queryParams = new URLSearchParams();
+      if (grade) queryParams.append('grade', grade);
+
+      return await this.client.get(`/bracelet-patterns?${queryParams.toString()}`);
+    } catch (error) {
+      console.error('Failed to fetch bracelet patterns:', error);
+      throw error;
+    }
+  }
+
   // 데이터 다운로드 (CSV 형식)
   async exportData(params = {}) {
     try {

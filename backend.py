@@ -81,15 +81,17 @@ class DataService:
                     if key not in trends:
                         trends[key] = []
                     
+                    # quality_prices를 JSON에서 변환
+                    quality_prices = json.loads(pattern.quality_prices)
+                    
                     # 시계열 데이터 포인트 추가
                     trends[key].append({
                         'timestamp': timestamp,
-                        'base_price': pattern.base_price,
-                        'sample_count': pattern.sample_count,
-                        'quality_coefficient': pattern.quality_coefficient,
-                        'trade_count_coefficient': pattern.trade_count_coefficient
+                        'quality_prices': quality_prices,
+                        'sample_count': pattern.total_sample_count,
+                        'common_option_values': json.loads(pattern.common_option_values)  # 이 부분 추가
                     })
-
+                    
             # 각 패턴의 데이터 정렬 및 최적화
             for key in trends:
                 # 시간순 정렬
@@ -114,12 +116,17 @@ class DataService:
         for i in range(0, len(data), window_size):
             window = data[i:i + window_size]
             # 윈도우 내 데이터의 평균값 계산
+            
+            # 품질별 가격의 평균 계산
+            avg_quality_prices = {}
+            for quality in window[0]['quality_prices'].keys():
+                prices = [p['quality_prices'][quality] for p in window]
+                avg_quality_prices[quality] = sum(prices) / len(prices)
+            
             avg_point = {
                 'timestamp': window[len(window)//2]['timestamp'],  # 중간 시점 사용
-                'base_price': sum(p['base_price'] for p in window) / len(window),
-                'sample_count': sum(p['sample_count'] for p in window) / len(window),
-                'quality_coefficient': sum(p['quality_coefficient'] for p in window) / len(window),
-                'trade_count_coefficient': sum(p['trade_count_coefficient'] for p in window) / len(window)
+                'quality_prices': avg_quality_prices,
+                'sample_count': sum(p['sample_count'] for p in window) / len(window)
             }
             result.append(avg_point)
 
@@ -145,17 +152,18 @@ class DataService:
                 .all()
 
             for pattern in patterns:
+                # JSON 데이터 파싱
+                quality_prices = json.loads(pattern.quality_prices)
+                common_option_values = json.loads(pattern.common_option_values)
+                
                 pattern_data = {
                     'grade': pattern.grade,
                     'part': pattern.part,
                     'level': pattern.level,
                     'pattern': pattern.pattern_key,
-                    'base_price': pattern.base_price,
-                    'sample_count': pattern.sample_count,
-                    'quality_coefficient': pattern.quality_coefficient,
-                    'trade_count_coefficient': pattern.trade_count_coefficient,
-                    'total_sample_count': pattern.total_sample_count,
-                    'common_option_values': json.loads(pattern.common_option_values)
+                    'quality_prices': quality_prices,
+                    'common_option_values': common_option_values,
+                    'sample_count': pattern.total_sample_count
                 }
 
                 full_key = f"{pattern.grade}:{pattern.part}:{pattern.level}:{pattern.pattern_key}"
@@ -198,7 +206,8 @@ class DataService:
                     'combat_stats': pattern.combat_stats,
                     'base_stats': pattern.base_stats,
                     'extra_slots': pattern.extra_slots,
-                    'price': pattern.price
+                    'price': pattern.price,
+                    'sample_count': pattern.total_sample_count
                 })
 
             return result

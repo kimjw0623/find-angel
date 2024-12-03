@@ -17,14 +17,15 @@ const PatternList = ({ patterns, selectedPatterns, onPatternSelect }) => {
   const sortedPatterns = Object.entries(patterns)
     .map(([key, pattern]) => ({
       ...pattern,
-      key
+      key,
+      currentPrice: pattern.quality_prices["60"] || 0  // 60+ 품질 가격을 기본으로 사용
     }))
     .filter(pattern => 
       (gradeFilter === 'all' || pattern.grade === gradeFilter) &&
       (partFilter === 'all' || pattern.part === partFilter) &&
       (levelFilter === 'all' || pattern.level === parseInt(levelFilter))
     )
-    .sort((a, b) => b.base_price - a.base_price);
+    .sort((a, b) => b.currentPrice - a.currentPrice);
 
   return (
     <div className="bg-white p-4 rounded-lg shadow">
@@ -85,7 +86,7 @@ const PatternList = ({ patterns, selectedPatterns, onPatternSelect }) => {
                 </div>
                 <div className="text-right">
                   <div className="font-medium">
-                    {pattern.base_price.toLocaleString()}골드
+                    {pattern.currentPrice.toLocaleString()}골드
                   </div>
                   <div className="text-sm text-gray-500">
                     거래량: {pattern.sample_count}

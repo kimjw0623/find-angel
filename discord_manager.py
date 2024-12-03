@@ -126,8 +126,8 @@ def format_multiline_message(item, evaluation):
     if evaluation["type"] == "accessory": # 장신구
         usage_type = evaluation["usage_type"]
         price_detail = evaluation["price_details"][usage_type]
-        toSend += f"{evaluation['grade']} {item['Name']}{RESET} ({usage_type}: 특옵 가격 {price_detail["base_price"]:,}골드)\\n"
-        toSend += f"품질 {quality_color(evaluation['quality'])}{evaluation['quality']}({price_detail["quality_adjustment"]:+,}골드){RESET} 거래 {item['AuctionInfo']['TradeAllowCount']}회({price_detail["trade_adjustment"]:+,}골드)\\n"
+        toSend += f"{evaluation['grade']} {item['Name']}{RESET} ({usage_type}: 품질+특옵 가격 {price_detail["base_price"]:,}골드)\\n"
+        toSend += f"품질 {quality_color(evaluation['quality'])}{evaluation['quality']}{RESET} 거래 {item['AuctionInfo']['TradeAllowCount']}회\\n"
         toSend += f"{evaluation['current_price']:,}골드 vs {evaluation['expected_price']:,}골드 ({evaluation['price_ratio']*100:.1f}%)\\n"
         options = []
         for opt in item["Options"]:

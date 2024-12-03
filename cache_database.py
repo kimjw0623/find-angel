@@ -30,11 +30,7 @@ class AccessoryPricePattern(CacheBase):
     pattern_key = Column(String, nullable=False)
     role = Column(String, nullable=False)
     
-    base_price = Column(Integer, nullable=False)
-    price_std = Column(Float, nullable=False)
-    quality_coefficient = Column(Float, nullable=False)
-    trade_count_coefficient = Column(Float, nullable=False)
-    sample_count = Column(Integer, nullable=False)
+    quality_prices = Column(SQLiteJSON)  # {"60": price, "70": price, "80": price, "90": price}
     total_sample_count = Column(Integer, nullable=False)
     common_option_values = Column(SQLiteJSON)
     
@@ -55,6 +51,7 @@ class BraceletPricePattern(CacheBase):
     base_stats = Column(String)
     extra_slots = Column(String)
     price = Column(Integer, nullable=False)
+    total_sample_count = Column(Integer, nullable=False)  # Added field
     
     cache = relationship("MarketPriceCache", back_populates="bracelet_patterns")
 

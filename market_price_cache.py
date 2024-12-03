@@ -475,12 +475,16 @@ class DBMarketPriceCache:
                         # 각 아이템의 품질에 따른 base price 고려하여 추가 가치 계산
                         additional_values = []
                         for item in matching_items:
+                            # 해당 품질 이하의 가장 높은 품질대의 가격 찾기
                             quality_cut = 90 if item.quality >= 90 else (item.quality // 10) * 10
-                            base_price = quality_prices[quality_cut]
-                            additional_values.append(item.price - base_price)
+                            valid_cutoffs = [qc for qc in quality_prices.keys() if int(qc) <= quality_cut]
+                            if valid_cutoffs:
+                                actual_quality_cut = max(valid_cutoffs)
+                                base_price = quality_prices[actual_quality_cut]
+                                additional_values.append(item.price - base_price)
 
                         sorted_values = sorted(additional_values)
-                        additional_value = sorted_values[1]  # 두 번째로 낮은 값 사용
+                        additional_value = sorted_values[0]  # 가장 낮은 값 사용
                         if additional_value > 0:
                             values[opt_name][target_value] = additional_value
                             print(f"  {opt_name} {target_value}: +{additional_value:,} ({len(matching_items)} samples)")

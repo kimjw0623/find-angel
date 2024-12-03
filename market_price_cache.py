@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, Union
 import numpy as np
 from database import *
 from cache_database import *
@@ -424,9 +424,8 @@ class DBMarketPriceCache:
 
         except Exception as e:
             print(f"Error updating price cache: {e}")
-            if self.debug:
-                import traceback
-                traceback.print_exc()
+            import traceback
+            traceback.print_exc()
             return False
 
     def get_cache_key(self, grade: str, part: str, level: int, options: Dict[str, List[Tuple[str, float]]]) -> Tuple[str, str]:
@@ -444,11 +443,11 @@ class DBMarketPriceCache:
         
         return dealer_key, support_key
 
-    def _calculate_common_option_values(self, items: List[PriceRecord], role: str):
+    def _calculate_common_option_values(self, items: List[PriceRecord], role: str, quality_prices: Dict[str, int]) -> Dict: 
         """각 Common 옵션 값의 추가 가치를 계산"""
-        MIN_SAMPLES = 3
-        if len(items) < MIN_SAMPLES:
-            print(f"\nInsufficient samples for common option calculation: {len(items)} < {MIN_SAMPLES}")
+        MIN_SAMPLE = 2
+        if len(items) < MIN_SAMPLE:
+            print(f"\nInsufficient samples for common option calculation: {len(items)} < {MIN_SAMPLE}")
             return {}
 
         # 역할별 관련 옵션 정의
@@ -457,44 +456,34 @@ class DBMarketPriceCache:
             "support": ["깡무공", "최생", "최마", "아군회복", "아군보호막"]
         }
 
-        # base_items 계산 (common 옵션이 없는 아이템)
-        base_items = [item for item in items 
-                    if not any(opt.option_name in role_related_options[role] 
-                            for opt in item.raw_options)]
-
-        if not base_items:
-            print("\nNo pure base items found, using filtered items for base price")
-            prices = [item.price for item in items]
-        else:
-            print(f"\nUsing {len(base_items)} pure base items")
-            prices = [item.price for item in base_items]
-
-        sorted_prices = sorted(prices)
-        base_price = sorted_prices[1] if len(sorted_prices) > 1 else sorted_prices[0]
-        print(f"Selected base price: {base_price:,}")
-
         values = {}
         # 역할별 관련 옵션에 대해서만 계산
         for opt_name in role_related_options[role]:
             if opt_name in self.COMMON_OPTIONS:
                 print(f"\nProcessing option: {opt_name}")
-
                 values[opt_name] = {}
-                for value in self.COMMON_OPTIONS[opt_name]:
-                    matching_items = [item for item in items 
-                                    if any(opt.option_name == opt_name and 
-                                        abs(opt.option_value - value) < 0.1 
-                                        for opt in item.raw_options)]
 
-                    if matching_items:
-                        matching_prices = [item.price for item in matching_items]
-                        sorted_matching_prices = sorted(matching_prices)
-                        min_price = sorted_matching_prices[0] if len(sorted_matching_prices) > 2 else base_price # 3개 이상 있어야 계산
-                        additional_value = min_price - base_price
+                for target_value in self.COMMON_OPTIONS[opt_name]:
+                    # target_value 이상의 옵션을 가진 아이템들
+                    matching_items = [
+                        item for item in items
+                        if any(opt.option_name == opt_name and opt.option_value >= target_value
+                            for opt in item.raw_options)
+                    ]
 
+                    if len(matching_items) >= MIN_SAMPLE:
+                        # 각 아이템의 품질에 따른 base price 고려하여 추가 가치 계산
+                        additional_values = []
+                        for item in matching_items:
+                            quality_cut = 90 if item.quality >= 90 else (item.quality // 10) * 10
+                            base_price = quality_prices[quality_cut]
+                            additional_values.append(item.price - base_price)
+
+                        sorted_values = sorted(additional_values)
+                        additional_value = sorted_values[1]  # 두 번째로 낮은 값 사용
                         if additional_value > 0:
-                            values[opt_name][value] = additional_value
-                            print(f"  {opt_name} {value}: +{additional_value:,} ({len(matching_items)} samples)")
+                            values[opt_name][target_value] = additional_value
+                            print(f"  {opt_name} {target_value}: +{additional_value:,} ({len(matching_items)} samples)")
 
         return values
 
@@ -512,19 +501,19 @@ class DBMarketPriceCache:
         
         for threshold in quality_thresholds:
             matching_items = [item for item in items if item.quality >= threshold]
-            if len(matching_items) >= 3:  # Minimum 3 samples required
+            if len(matching_items) >= 2:  # Minimum 2 samples required
                 prices = sorted(item.price for item in matching_items)
                 # Use second lowest price to avoid outliers
-                quality_prices[str(threshold)] = prices[1] if len(prices) > 1 else prices[0]
+                quality_prices[threshold] = prices[1] if len(prices) > 1 else prices[0]
                 print(f"\nQuality {threshold}+:")
                 print(f"- Sample count: {len(matching_items)}")
-                print(f"- Base price: {quality_prices[str(threshold)]:,}")
+                print(f"- Base price: {quality_prices[threshold]:,}")
 
         if not quality_prices:
             return None
 
         # Calculate common option values using items with quality >= 60
-        common_option_values = self._calculate_common_option_values(items, role)
+        common_option_values = self._calculate_common_option_values(items, role, quality_prices)
 
         return {
             'quality_prices': quality_prices,
@@ -562,18 +551,11 @@ class DBMarketPriceCache:
                     "전특1": {}
                 }
 
-                # 패턴별 카운트 추가
-                pattern_counts = {k: 0 for k in pattern_prices.keys()}
-                expected_extra_slots = 2 if grade == "유물" else 3
-
                 for record in records:
                     session.refresh(record)
 
-                    # 부여 효과 수량이 기대값과 다르면 스킵
-                    if record.extra_option_count != expected_extra_slots:
-                        continue
-
                     item_data = {
+                        'grade': record.grade,
                         'fixed_option_count': record.fixed_option_count,
                         'extra_option_count': record.extra_option_count,
                         'combat_stats': [(stat.stat_type, stat.value) for stat in record.combat_stats],
@@ -581,41 +563,28 @@ class DBMarketPriceCache:
                         'special_effects': [(effect.effect_type, effect.value) for effect in record.special_effects]
                     }
 
-                    # 디버깅을 위한 출력 추가
-                    if self.debug:
-                        print("\nProcessing record:")
-                        print(f"Fixed options: {record.fixed_option_count}")
-                        print(f"Extra options: {record.extra_option_count}")
-                        print(f"Combat stats: {item_data['combat_stats']}")
-                        print(f"Base stats: {item_data['base_stats']}")
-                        print(f"Special effects: {item_data['special_effects']}")
-
-                    pattern_info = self._classify_bracelet_pattern(item_data)
-                    if not pattern_info:
+                    # return_list=True로 호출하여 모든 하위 구간의 패턴 가져오기
+                    pattern_info_list = self._classify_bracelet_pattern(item_data, return_list=True)
+                    if not pattern_info_list:
                         if self.debug:
                             print("No pattern found for this record")
                         continue
 
-                    pattern_type, details = pattern_info
-                    pattern_counts[pattern_type] += 1  # 패턴 카운트 증가
+                    # 각 패턴에 대해 가격 정보 추가
+                    for pattern_type, details in pattern_info_list:
 
-                    key = (details['pattern'], details['values'], details['extra_slots'])
+                        key = (details['pattern'], details['values'], details['extra_slots'])
 
-                    if pattern_type not in pattern_prices:
-                        pattern_prices[pattern_type] = {}
+                        if pattern_type not in pattern_prices:
+                            pattern_prices[pattern_type] = {}
 
-                    if key not in pattern_prices[pattern_type]:
-                        pattern_prices[pattern_type][key] = []
+                        if key not in pattern_prices[pattern_type]:
+                            pattern_prices[pattern_type][key] = []
 
-                    pattern_prices[pattern_type][key].append(record.price)
+                        pattern_prices[pattern_type][key].append(record.price)
 
                 print(f"Classifying bracelet patterns duration: {datetime.now() - start_time}")
                 start_time = datetime.now()
-
-                # 패턴별 통계 출력
-                print("\nPattern counts:")
-                for pattern_type, count in pattern_counts.items():
-                    print(f"{pattern_type}: {count}")
 
                 # 최종 가격 계산
                 result = {}
@@ -646,127 +615,230 @@ class DBMarketPriceCache:
                 traceback.print_exc()
             return {}
 
-    def _classify_bracelet_pattern(self, item_data: Dict) -> Tuple[str, Dict]:
-        """팔찌 패턴 분류 및 키 생성"""
+    def _classify_bracelet_pattern(self, item_data: Dict, return_list: bool = False) -> Union[Optional[Tuple[str, Dict]], Optional[List[Tuple[str, Dict]]]]:
+        """
+        팔찌 패턴 분류 및 키 생성
+        return_list가 True면 해당 값 이하의 모든 구간을 포함한 패턴들의 리스트를 반환
+        
+        Args:
+            item_data: 팔찌 데이터
+            return_list: True면 가능한 모든 하위 구간의 패턴들을 리스트로 반환
+            
+        Returns:
+            return_list=False: (pattern_type, details) tuple 또는 None
+            return_list=True: List of (pattern_type, details) tuples 또는 None
+        """
+        grade = item_data['grade']
         fixed_count = item_data['fixed_option_count']
         extra_slots = item_data['extra_option_count']
         combat_stats = [(stat, value) for stat, value in item_data['combat_stats']]
         base_stats = [(stat, value) for stat, value in item_data['base_stats']]
         special_effects = [(effect, value) for effect, value in item_data['special_effects']]
 
-        # 디버깅을 위한 출력 추가
         if self.debug:
             print("\nClassifying bracelet pattern:")
+            print(f"Grade: {grade}")
             print(f"Fixed count: {fixed_count}")
+            print(f"Extra slots: {extra_slots}")
             print(f"Combat stats: {combat_stats}")
             print(f"Base stats: {base_stats}")
             print(f"Special effects: {special_effects}")
-            print(f"Extra slots: {extra_slots}")
+
+        result = []  # return_list=True일 때 사용할 리스트
 
         # 고정 효과 2개인 경우
         if fixed_count == 2:
-            # 디버깅을 위한 출력
-            if self.debug:
-                print("Checking fixed count 2 patterns")
-
             if len(combat_stats) == 2:  # 전특 2개
-                if self.debug:
-                    print("Found 전특2 pattern")
-                stats = sorted([(stat, self._round_combat_stat(value)) for stat, value in combat_stats],
-                            key=lambda x: x[0])  # 스탯명으로 정렬
-                return (
-                    "전특2",
-                    {
-                        "pattern": f"{stats[0][0]}+{stats[1][0]}",
-                        "values": f"{stats[0][1]}+{stats[1][1]}",
-                        "extra_slots": f"부여{extra_slots}"
-                    }
-                )
-            elif len(combat_stats) == 1 and base_stats:  # 전특1+기본
-                if self.debug:
-                    print("Found 전특1+기본 pattern")
-                combat = (combat_stats[0][0], self._round_combat_stat(combat_stats[0][1]))
-                base = (base_stats[0][0], self._round_base_stat(base_stats[0][1]))
-                return (
-                    "전특1+기본",
-                    {
-                        "pattern": f"{combat[0]}+{base[0]}",
-                        "values": f"{combat[1]}+{base[1]}",
-                        "extra_slots": f"부여{extra_slots}"
-                    }
-                )
-            elif len(combat_stats) == 1:  # 전특1+공이속 또는 전특1+잡옵
-                if self.debug:
-                    print(f"Checking 전특1 patterns with special effects: {special_effects}")
-
-                if any(effect.strip() == "공격 및 이동 속도 증가" for (effect, _) in special_effects):
-                    if self.debug:
-                        print("Found 전특1+공이속 pattern")
-                    combat = (combat_stats[0][0], self._round_combat_stat(combat_stats[0][1]))
+                stat1, value1 = combat_stats[0]
+                stat2, value2 = combat_stats[1]
+                
+                if return_list:
+                    # 각 스탯의 가능한 모든 하위값 가져오기
+                    values1 = self._round_combat_stat(grade, value1, return_list=True)
+                    values2 = self._round_combat_stat(grade, value2, return_list=True)
+                    
+                    # 모든 가능한 조합 생성
+                    for v1 in values1:
+                        for v2 in values2:
+                            stats = sorted([(stat1, v1), (stat2, v2)], key=lambda x: x[0])
+                            result.append((
+                                "전특2",
+                                {
+                                    "pattern": f"{stats[0][0]}+{stats[1][0]}",
+                                    "values": f"{stats[0][1]}+{stats[1][1]}",
+                                    "extra_slots": f"부여{extra_slots}"
+                                }
+                            ))
+                else:
+                    # 기존 로직
+                    v1 = self._round_combat_stat(grade, value1)
+                    v2 = self._round_combat_stat(grade, value2)
+                    stats = sorted([(stat1, v1), (stat2, v2)], key=lambda x: x[0])
                     return (
-                        "전특1+공이속",
+                        "전특2",
                         {
-                            "pattern": combat[0],
-                            "values": str(combat[1]),
+                            "pattern": f"{stats[0][0]}+{stats[1][0]}",
+                            "values": f"{stats[0][1]}+{stats[1][1]}",
                             "extra_slots": f"부여{extra_slots}"
                         }
                     )
+                        
+            elif len(combat_stats) == 1 and base_stats:  # 전특1+기본
+                combat = combat_stats[0]
+                base = base_stats[0]
+                
+                if return_list:
+                    combat_values = self._round_combat_stat(grade, combat[1], return_list=True)
+                    base_values = self._round_base_stat(grade, base[1], return_list=True)
+                    
+                    for cv in combat_values:
+                        for bv in base_values:
+                            result.append((
+                                "전특1+기본",
+                                {
+                                    "pattern": f"{combat[0]}+{base[0]}",
+                                    "values": f"{cv}+{bv}",
+                                    "extra_slots": f"부여{extra_slots}"
+                                }
+                            ))
                 else:
-                    if self.debug:
-                        print("Found 전특1+잡옵 pattern")
-                    combat = (combat_stats[0][0], self._round_combat_stat(combat_stats[0][1]))
+                    # 기존 로직
+                    cv = self._round_combat_stat(grade, combat[1])
+                    bv = self._round_base_stat(grade, base[1])
                     return (
-                        "전특1+잡옵",
+                        "전특1+기본",
                         {
-                            "pattern": combat[0],
-                            "values": str(combat[1]),
+                            "pattern": f"{combat[0]}+{base[0]}",
+                            "values": f"{cv}+{bv}",
                             "extra_slots": f"부여{extra_slots}"
                         }
-                    )    
-            elif base_stats and any(effect == "공격 및 이동 속도 증가" for effect, _ in special_effects):  # 기본+공이속
-                base = (base_stats[0][0], self._round_base_stat(base_stats[0][1]))
+                    )
+                        
+            elif len(combat_stats) == 1:  # 전특1+공이속 or 전특1+잡옵
+                has_speed = any(effect.strip() == "공격 및 이동 속도 증가" 
+                            for (effect, _) in special_effects)
+                
+                combat = combat_stats[0]
+                pattern_type = "전특1+공이속" if has_speed else "전특1+잡옵"
+                
+                if return_list:
+                    combat_values = self._round_combat_stat(grade, combat[1], return_list=True)
+                    for cv in combat_values:
+                        result.append((
+                            pattern_type,
+                            {
+                                "pattern": combat[0],
+                                "values": str(cv),
+                                "extra_slots": f"부여{extra_slots}"
+                            }
+                        ))
+                else:
+                    # 기존 로직
+                    cv = self._round_combat_stat(grade, combat[1])
+                    return (
+                        pattern_type,
+                        {
+                            "pattern": combat[0],
+                            "values": str(cv),
+                            "extra_slots": f"부여{extra_slots}"
+                        }
+                    )
+                    
+            elif base_stats and any(effect == "공격 및 이동 속도 증가" 
+                                for effect, _ in special_effects):  # 기본+공이속
+                base = base_stats[0]
+                
+                if return_list:
+                    base_values = self._round_base_stat(grade, base[1], return_list=True)
+                    for bv in base_values:
+                        result.append((
+                            "기본+공이속",
+                            {
+                                "pattern": base[0],
+                                "values": str(bv),
+                                "extra_slots": f"부여{extra_slots}"
+                            }
+                        ))
+                else:
+                    # 기존 로직
+                    bv = self._round_base_stat(grade, base[1])
+                    return (
+                        "기본+공이속",
+                        {
+                            "pattern": base[0],
+                            "values": str(bv),
+                            "extra_slots": f"부여{extra_slots}"
+                        }
+                    )
+
+        # 고정 효과 1개인 경우
+        elif fixed_count == 1 and len(combat_stats) == 1:
+            combat = combat_stats[0]
+            
+            if return_list:
+                combat_values = self._round_combat_stat(grade, combat[1], return_list=True)
+                for cv in combat_values:
+                    result.append((
+                        "전특1",
+                        {
+                            "pattern": combat[0],
+                            "values": str(cv),
+                            "extra_slots": f"부여{extra_slots}"
+                        }
+                    ))
+            else:
+                # 기존 로직
+                cv = self._round_combat_stat(grade, combat[1])
                 return (
-                    "기본+공이속",
+                    "전특1",
                     {
-                        "pattern": base[0],
-                        "values": str(base[1]),
+                        "pattern": combat[0],
+                        "values": str(cv),
                         "extra_slots": f"부여{extra_slots}"
                     }
                 )
 
-        # 고정 효과 1개인 경우
-        elif fixed_count == 1 and len(combat_stats) == 1:
-            if self.debug:
-                print("Found 전특1 pattern")
-            combat = (combat_stats[0][0], self._round_combat_stat(combat_stats[0][1]))
-            return (
-                "전특1",
-                {
-                    "pattern": combat[0],
-                    "values": str(combat[1]),
-                    "extra_slots": f"부여{extra_slots}"
-                }
-            )
-
-        if self.debug:
-            print("No matching pattern found")
+        if return_list:
+            return result if result else None
         return None
 
-    def _round_combat_stat(self, value: float) -> int:
-        """전투특성 값을 기준값으로 내림"""
-        thresholds = [40, 50, 60, 70, 80, 90, 100, 110]
-        for threshold in thresholds:
+    def _round_combat_stat(self, grade: str, value: float, return_list: bool = False) -> Union[int, List[int]]:
+        """
+        전투특성 값을 기준값으로 내림
+        return_list가 True면 해당 값 이하의 모든 기준값을 리스트로 반환
+        """
+        thresholds = [40, 50, 60, 70, 80, 90]
+        combat_stat_bonus = 20 if grade == "고대" else 0
+        adjusted_thresholds = [t + combat_stat_bonus for t in thresholds]
+        
+        if return_list:
+            # value보다 작거나 같은 모든 threshold 반환 (내림차순)
+            return sorted([t for t in adjusted_thresholds if t <= value], reverse=True)
+        
+        # 기존 로직: 가장 가까운 하위 threshold 반환
+        for threshold in adjusted_thresholds:
             if value < threshold:
-                return thresholds[max(0, thresholds.index(threshold) - 1)]
-        return thresholds[-1]
+                return adjusted_thresholds[max(0, adjusted_thresholds.index(threshold) - 1)]
+        return adjusted_thresholds[-1]
 
-    def _round_base_stat(self, value: float) -> int:
-        """기본스탯 값을 기준값으로 내림"""
-        thresholds = [6400, 8000, 9600, 11200, 12800, 14400]
-        for threshold in thresholds:
+    def _round_base_stat(self, grade: str, value: float, return_list: bool = False) -> Union[int, List[int]]:
+        """
+        기본스탯 값을 기준값으로 내림
+        return_list가 True면 해당 값 이하의 모든 기준값을 리스트로 반환
+        """
+        thresholds = [6400, 8000, 9600, 11200]
+        base_stat_bonus = 3200 if grade == "고대" else 0
+        adjusted_thresholds = [t + base_stat_bonus for t in thresholds]
+        
+        if return_list:
+            # value보다 작거나 같은 모든 threshold 반환 (내림차순)
+            return sorted([t for t in adjusted_thresholds if t <= value], reverse=True)
+        
+        # 기존 로직: 가장 가까운 하위 threshold 반환
+        for threshold in adjusted_thresholds:
             if value < threshold:
-                return thresholds[max(0, thresholds.index(threshold) - 1)]
-        return thresholds[-1]
+                return adjusted_thresholds[max(0, adjusted_thresholds.index(threshold) - 1)]
+        return adjusted_thresholds[-1]
 
     def _is_similar_values(self, cached_values: str, target_values: str, pattern_type: str = None) -> bool:
         """

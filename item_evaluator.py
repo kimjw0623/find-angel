@@ -348,6 +348,7 @@ class ItemEvaluator:
         # print(grade, fixed_option_count, extra_option_count, combat_stats, base_stats, special_effects)
         # 캐시된 가격 데이터를 사용하여 예상 가격 계산
         item_data = {
+            'grade': grade,
             'fixed_option_count': fixed_option_count,
             'extra_option_count': extra_option_count,
             'combat_stats': combat_stats,

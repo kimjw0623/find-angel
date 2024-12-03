@@ -114,19 +114,18 @@ class ItemEvaluator:
 
         return reference_options
     
-    def _estimate_dealer_price(self, reference_options: Dict[str, Any], 
+    def _estimate_dealer_price(self, reference_options: Dict[str, Any], quality: int,
                             price_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         딜러용 가격 추정 및 상세 계산 내역 반환
         """
         # 기본 가격
-        base_price = price_data['base_price']
+        quality_cut = (quality // 10) * 10
+        quality_prices = price_data['quality_prices']
         result = {
-            'base_price': base_price,
+            'base_price': quality_prices[quality_cut],
             'options': {},
-            'quality_adjustment': 0,
-            'trade_adjustment': 0,
-            'final_price': base_price
+            'final_price': quality_prices[quality_cut]
         }
 
         # 딜러용 보너스 옵션 가치 계산
@@ -149,35 +148,21 @@ class ItemEvaluator:
                         print(f"No cached values found for {opt_name} {opt_value}")
                     continue
 
-        # 품질 보정
-        quality_diff = reference_options["base_info"]["quality"] - 67
-        quality_adjustment = int(quality_diff * price_data['quality_coefficient'] * 0.5)
-        result['quality_adjustment'] = quality_adjustment
-        result['final_price'] += quality_adjustment
-
-        # 거래 횟수 보정
-        trade_diff = reference_options["base_info"]["trade_count"] - 2
-        if trade_diff < 0:
-            trade_adjustment = int(trade_diff * abs(price_data['trade_count_coefficient']))
-            result['trade_adjustment'] = trade_adjustment
-            result['final_price'] += trade_adjustment
-
         result['final_price'] = max(int(result['final_price']), 1)
         return result
     
-    def _estimate_support_price(self, reference_options: Dict[str, Any], 
+    def _estimate_support_price(self, reference_options: Dict[str, Any], quality: int,
                             price_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         서포터용 가격 추정 및 상세 계산 내역 반환
         """
         # 기본 가격
-        base_price = price_data['base_price']
+        quality_cut = (quality // 10) * 10
+        quality_prices = price_data['quality_prices']
         result = {
-            'base_price': base_price,
+            'base_price': quality_prices[quality_cut],
             'options': {},
-            'quality_adjustment': 0,
-            'trade_adjustment': 0,
-            'final_price': base_price
+            'final_price': quality_prices[quality_cut]
         }
 
         # 서포터용 보너스 옵션 가치 계산
@@ -199,19 +184,6 @@ class ItemEvaluator:
                     if self.debug:
                         print(f"No cached values found for {opt_name} {opt_value}")
                     continue
-
-        # 품질 보정
-        quality_diff = reference_options["base_info"]["quality"] - 67
-        quality_adjustment = int(quality_diff * price_data['quality_coefficient'] * 0.5)
-        result['quality_adjustment'] = quality_adjustment
-        result['final_price'] += quality_adjustment
-
-        # 거래 횟수 보정
-        trade_diff = reference_options["base_info"]["trade_count"] - 2
-        if trade_diff < 0:
-            trade_adjustment = int(trade_diff * abs(price_data['trade_count_coefficient']))
-            result['trade_adjustment'] = trade_adjustment
-            result['final_price'] += trade_adjustment
 
         result['final_price'] = max(int(result['final_price']), 1)
         return result
@@ -240,8 +212,8 @@ class ItemEvaluator:
             price_data = self.price_cache.get_price_data(grade, part, level, reference_options)
 
             # 딜러용/서포터용 가격 추정 - 상세 내역 포함
-            dealer_details = self._estimate_dealer_price(reference_options, price_data["dealer"])
-            support_details = self._estimate_support_price(reference_options, price_data["support"])
+            dealer_details = self._estimate_dealer_price(reference_options, int(item['GradeQuality']), price_data["dealer"])
+            support_details = self._estimate_support_price(reference_options, int(item['GradeQuality']), price_data["support"])
 
             result = {
                 'dealer_details': dealer_details,
@@ -383,7 +355,10 @@ class ItemEvaluator:
             'special_effects': special_effects
         }
         
-        expected_price = self.price_cache.get_bracelet_price(grade, item_data)
+        bracelet_result = self.price_cache.get_bracelet_price(grade, item_data)
+        expected_price = None
+        if bracelet_result:
+            expected_price, total_sample_count = bracelet_result
 
         if not expected_price:
             if current_price > 5000:
@@ -423,8 +398,8 @@ class ItemEvaluator:
         }
 
     def _sigmoid(self, expected_price: int) -> float:
-        min_ratio = 0.5
-        max_ratio = 0.75
+        min_ratio = 0.6
+        max_ratio = 0.8
         max_price = 400000
         k3 = 3e-5  # 가장 완만한 기울기
         midpoint3 = max_price*2/3  # 가장 늦은 변곡점

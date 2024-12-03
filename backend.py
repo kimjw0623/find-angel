@@ -243,6 +243,96 @@ async def bracelet_patterns(
     """팔찌 패턴 데이터 API"""
     return data_service.get_bracelet_patterns(grade)
 
+@app.get("/api/bracelet-trends")
+async def bracelet_trends(
+    grade: Optional[str] = Query(None, enum=['고대', '유물']),
+    time_range: str = Query("1d", enum=["1d", "1w", "1m", "3m"])
+):
+    """팔찌 가격 추이 데이터 API"""
+    try:
+        with data_service.cache_db.get_read_session() as session:
+            # search_cycle_id 범위 설정
+            start_search_cycle_id = get_search_cycle_id_range(time_range)
+            
+            # 기본 쿼리 구성
+            cache_entries = session.query(MarketPriceCache)\
+                .filter(MarketPriceCache.search_cycle_id >= start_search_cycle_id)\
+                .order_by(MarketPriceCache.search_cycle_id.asc())\
+                .all()
+
+            trends = {}
+            for cache in cache_entries:
+                timestamp = int(parse_search_cycle_id(cache.search_cycle_id).timestamp() * 1000)
+
+                # 패턴별 가격 데이터 조회
+                patterns = session.query(BraceletPricePattern)\
+                    .filter_by(cache_id=cache.cache_id)
+                
+                if grade:
+                    patterns = patterns.filter_by(grade=grade)
+
+                for pattern in patterns:
+                    pattern_key = f"{pattern.grade}:{pattern.pattern_type}:{pattern.combat_stats or ''}:{pattern.base_stats or ''}:{pattern.extra_slots}"
+                    
+                    if pattern_key not in trends:
+                        trends[pattern_key] = []
+                    
+                    # 패턴의 시계열 데이터 추가
+                    trends[pattern_key].append({
+                        'timestamp': timestamp,
+                        'price': pattern.price,
+                        'sample_count': pattern.total_sample_count
+                    })
+            
+            return trends
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/bracelet-patterns")
+async def bracelet_patterns(
+    grade: Optional[str] = Query(None, enum=['고대', '유물'])
+):
+    """팔찌 패턴과 현재 가격 데이터 API"""
+    try:
+        with data_service.cache_db.get_read_session() as session:
+            # 가장 최근의 활성 캐시 조회
+            active_cache = session.query(MarketPriceCache)\
+                .filter_by(is_active=True)\
+                .first()
+            
+            if not active_cache:
+                raise HTTPException(status_code=404, detail="No active cache found")
+
+            # 패턴 조회 쿼리 구성
+            patterns_query = session.query(BraceletPricePattern)\
+                .filter_by(cache_id=active_cache.cache_id)
+            
+            if grade:
+                patterns_query = patterns_query.filter_by(grade=grade)
+
+            # 결과 생성
+            patterns = {}
+            for pattern in patterns_query:
+                pattern_key = f"{pattern.grade}:{pattern.pattern_type}:{pattern.combat_stats or ''}:{pattern.base_stats or ''}:{pattern.extra_slots}"
+                
+                patterns[pattern_key] = {
+                    'grade': pattern.grade,
+                    'type': pattern.pattern_type,
+                    'combat_stats': pattern.combat_stats,
+                    'base_stats': pattern.base_stats,
+                    'special_effects': pattern.extra_slots,  # 부여 효과는 special_effects로 매핑
+                    'fixed_option_count': int(pattern.pattern_type.split()[1]) if pattern.pattern_type else None,
+                    'extra_option_count': int(pattern.extra_slots.split()[1]) if pattern.extra_slots else None,
+                    'current_price': pattern.price,
+                    'sample_count': pattern.total_sample_count
+                }
+
+            return patterns
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

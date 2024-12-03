@@ -1,14 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import api from '../services/api';
-import PriceChart from '../components/PriceChart';
-import PatternList from '../components/PatternList';
+import AccessoryPriceChart from '../components/AccessoryPriceChart';
+import AccessoryPatternList from '../components/AccessoryPatternList';
 
-const Dashboard = () => {
+const AccessoryDashboard = ({ timeRange }) => {
   const [priceData, setPriceData] = useState({});
   const [patterns, setPatterns] = useState({ dealer: {}, support: {} });
   const [selectedRole, setSelectedRole] = useState('dealer');
   const [selectedPatterns, setSelectedPatterns] = useState(new Set());
-  const [timeRange, setTimeRange] = useState('1d');  // 기본값 1일
 
   useEffect(() => {
     const fetchData = async () => {
@@ -25,7 +24,7 @@ const Dashboard = () => {
     };
 
     fetchData();
-  }, [selectedRole, timeRange]);  // timeRange를 의존성 배열에 추가
+  }, [selectedRole, timeRange]);
 
   const handlePatternSelect = (patternKey) => {
     setSelectedPatterns(prev => {
@@ -44,9 +43,7 @@ const Dashboard = () => {
   };
 
   return (
-    <div className="container mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-6">로스트아크 시장 분석</h1>
-      
+    <div>
       <div className="mb-4 flex space-x-4">
         <select
           className="p-2 border rounded"
@@ -58,17 +55,6 @@ const Dashboard = () => {
         >
           <option value="dealer">딜러</option>
           <option value="support">서포터</option>
-        </select>
-
-        <select
-          className="p-2 border rounded"
-          value={timeRange}
-          onChange={(e) => setTimeRange(e.target.value)}
-        >
-          <option value="1d">1일</option>
-          <option value="1w">1주일</option>
-          <option value="1m">1개월</option>
-          <option value="3m">3개월</option>
         </select>
 
         {selectedPatterns.size > 0 && (
@@ -84,7 +70,7 @@ const Dashboard = () => {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="md:col-span-2">
           {selectedPatterns.size > 0 && (
-            <PriceChart
+            <AccessoryPriceChart
               data={priceData}
               selectedPatterns={Array.from(selectedPatterns)}
               patterns={patterns[selectedRole]}
@@ -92,7 +78,7 @@ const Dashboard = () => {
           )}
         </div>
         <div>
-          <PatternList
+          <AccessoryPatternList
             patterns={patterns[selectedRole]}
             selectedPatterns={selectedPatterns}
             onPatternSelect={handlePatternSelect}
@@ -103,4 +89,4 @@ const Dashboard = () => {
   );
 };
 
-export default Dashboard;
+export default AccessoryDashboard;

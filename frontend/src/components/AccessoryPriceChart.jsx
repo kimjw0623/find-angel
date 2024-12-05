@@ -5,11 +5,14 @@ const COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff7300', '#665191', '#d45087'
 
 const CustomTooltip = ({ active, payload, label, patterns }) => {
   if (active && payload && payload.length) {
+    // payload를 가격 기준으로 내림차순 정렬
+    const sortedPayload = [...payload].sort((a, b) => (b.value || 0) - (a.value || 0));
+
     return (
       <div className="bg-white p-4 border rounded shadow-lg">
         <p className="font-bold">{new Date(label).toLocaleString()}</p>
         
-        {payload.map((entry, index) => {
+        {sortedPayload.map((entry, index) => {
           const patternKey = entry.dataKey.split('_')[1];
           const patternData = entry.payload[`data_${patternKey}`];
           
@@ -21,11 +24,11 @@ const CustomTooltip = ({ active, payload, label, patterns }) => {
 
               <div className="ml-2">
                 {/* 품질별 가격 정보 */}
-                <p>가격: {entry.value.toLocaleString()}골드</p>
-                <p className="text-sm">샘플 수: {patternData.sample_count}개</p>
+                <p>가격: {entry.value?.toLocaleString()}골드</p>
+                <p className="text-sm">샘플 수: {patternData?.sample_count}개</p>
 
                 {/* Common 옵션 가치 정보 */}
-                {patternData.common_option_values && 
+                {patternData?.common_option_values && 
                  Object.keys(patternData.common_option_values).length > 0 && (
                   <div className="mt-1">
                     <p className="text-sm font-medium">부가 옵션 가치:</p>
@@ -71,13 +74,16 @@ const PriceChart = ({ data, selectedPatterns, patterns }) => {
         }
         const timePoint = timeMap.get(point.timestamp);
         
-        // 각 패턴의 데이터를 저장
-        timePoint[`price_${pattern}`] = point.quality_prices[qualityFilter] || 0;
-        timePoint[`data_${pattern}`] = {
-          quality_prices: point.quality_prices,
-          common_option_values: point.common_option_values,
-          sample_count: point.sample_count
-        };
+        // 각 패턴의 데이터를 저장 - 0인 경우 undefined로 설정
+        const price = point.quality_prices[qualityFilter] || undefined;
+        if (price !== undefined) {
+          timePoint[`price_${pattern}`] = price;
+          timePoint[`data_${pattern}`] = {
+            quality_prices: point.quality_prices,
+            common_option_values: point.common_option_values,
+            sample_count: point.sample_count
+          };
+        }
       });
     });
 
@@ -116,8 +122,7 @@ const PriceChart = ({ data, selectedPatterns, patterns }) => {
               scale="time"
             />
             <YAxis
-              tickFormatter={(value) => `${value.toLocaleString()}`}
-              domain={[0, dataMax => dataMax * 1.2]}  // 최대값의 120%까지 표시
+              tickFormatter={(value) => `${value?.toLocaleString()}`}
             />
             <Tooltip content={<CustomTooltip patterns={patterns} />} />
             <Legend />
@@ -130,6 +135,7 @@ const PriceChart = ({ data, selectedPatterns, patterns }) => {
                 name={`${patterns[pattern]?.grade} ${patterns[pattern]?.part} ${patterns[pattern]?.level}연마 (${patterns[pattern]?.pattern})`}
                 dot={false}
                 strokeWidth={2}
+                connectNulls={true}
               />
             ))}
             <Brush dataKey="timestamp" height={30} stroke="#8884d8" />

@@ -1,7 +1,7 @@
 from enhancement_simulator import *
-from market_price_cache import MarketPriceCache
-from item_checker import ItemEvaluator
-from database import DatabaseManager
+from market_price_cache import DBMarketPriceCache
+from item_evaluator import ItemEvaluator
+from database import *
 from collections import defaultdict
 from typing import Dict, List, Tuple
 from datetime import datetime
@@ -12,8 +12,9 @@ class EnhancementStrategyAnalyzer:
     def __init__(self, db_manager: DatabaseManager, debug: bool = False):
         self.analyzer = EnhancementAnalyzer(db_manager, debug)
         self.simulator = EnhancementSimulator()
+        self.debug = debug
 
-    def analyze_single_enhancement_strategy(self, 
+    def analyze_single_enhancement_strategy(self,
                                          acc_type: AccessoryType,
                                          grade: Grade,
                                          quality: int = 90,
@@ -78,7 +79,7 @@ class EnhancementStrategyAnalyzer:
 class EnhancementAnalyzer:
     def __init__(self, db_manager: DatabaseManager, debug: bool = False):
         self.debug = debug
-        self.price_cache = MarketPriceCache(db_manager, debug=debug)
+        self.price_cache = DBMarketPriceCache(db_manager, debug=debug)
         self.evaluator = ItemEvaluator(self.price_cache, debug=debug)
 
     def _get_option_value(self, option_name: str, option_grade: OptionGrade) -> float:
@@ -224,10 +225,12 @@ class EnhancementAnalyzer:
             print(f"평균 예상 가치: {avg_value:,.0f} 골드")
 
     def _analyze_patterns(self, results: List[List[Tuple[AccessoryOption, EnhancementCost]]], 
-                         acc_type: AccessoryType,
-                         grade: Grade,
-                         quality: int) -> Dict:
-        """특수 옵션 위주로 패턴 분석"""
+                        acc_type: AccessoryType,
+                        grade: Grade,
+                        quality: int) -> Dict:
+        """
+        모든 연마 결과를 분석하고, 패턴별로 분류
+        """
         dealer_stats = defaultdict(lambda: {
             'values': [],
             'min_item': None,
@@ -244,14 +247,13 @@ class EnhancementAnalyzer:
         })
         
         for trial in results:
-            # 특수 옵션만 추출
-            special_options = [
+            # 모든 옵션을 패턴 키로 사용
+            pattern_key = tuple(sorted(
                 (opt.name, opt.grade.value)
                 for opt, _ in trial
-                if self._is_special_option(opt.name, acc_type)
-            ]
+            ))
             
-            # 시장 가격 평가 위한 아이템 생성
+            # 시장 가격 평가를 위한 아이템 생성
             market_item = self.convert_to_market_item(acc_type, grade, quality, trial)
             evaluation = self.evaluator.evaluate_item(market_item)
             if not evaluation:
@@ -263,11 +265,17 @@ class EnhancementAnalyzer:
                 for opt, _ in trial
             ]
             
-            pattern_key = tuple(sorted(special_options))
             expected_price = evaluation['expected_price']
             
             # 딜러/서포터 구분하여 통계 저장
-            if self._is_dealer_pattern(special_options, acc_type):
+            has_dealer_options = any(self._is_special_option(opt.name, acc_type) and 
+                                self._is_dealer_pattern([(opt.name, opt.grade.value)], acc_type)
+                                for opt, _ in trial)
+            has_support_options = any(self._is_special_option(opt.name, acc_type) and 
+                                    self._is_support_pattern([(opt.name, opt.grade.value)], acc_type)
+                                    for opt, _ in trial)
+            
+            if has_dealer_options or (not has_dealer_options and not has_support_options):
                 stats = dealer_stats[pattern_key]
                 stats['values'].append(expected_price)
                 
@@ -285,7 +293,7 @@ class EnhancementAnalyzer:
                         'details': evaluation
                     }
                     
-            elif self._is_support_pattern(special_options, acc_type):
+            elif has_support_options:
                 stats = support_stats[pattern_key]
                 stats['values'].append(expected_price)
                 
@@ -336,7 +344,7 @@ class EnhancementAnalyzer:
                 "Grade": grade.value,
                 "GradeQuality": quality,
                 "AuctionInfo": {
-                    "BuyPrice": 1000,  # 가격 평가용이므로 임의의 값
+                    "BuyPrice": 1,  # 가격 평가용이므로 임의의 값
                     "TradeAllowCount": 2  # 기본값
                 },
                 "Options": [
@@ -356,7 +364,7 @@ class EnhancementAnalyzer:
             }
 
 def main():
-    db_manager = DatabaseManager()
+    db_manager = init_database()
     analyzer = EnhancementStrategyAnalyzer(db_manager, debug=False)
 
     test_cases = [
@@ -377,7 +385,7 @@ def main():
          (AccessoryType.RING, Grade.RELIC, None, "유물 반지 (0->3)")],
          
         # 1->3 연마 분석 케이스 (프리셋 필요)
-        [(AccessoryType.NECKLACE, Grade.ANCIENT, [("추피", OptionGrade.LOW)], "고대 목걸이 (1->3)"),
+        [(AccessoryType.NECKLACE, Grade.ANCIENT, [("추피", OptionGrade.HIGH)], "고대 목걸이 (1->3)"),
          (AccessoryType.EARRING, Grade.ANCIENT, [("공퍼", OptionGrade.LOW)], "고대 귀걸이 (1->3)"),
          (AccessoryType.RING, Grade.ANCIENT, [("치적", OptionGrade.LOW)], "고대 반지 (1->3)"),
          (AccessoryType.NECKLACE, Grade.RELIC, [("추피", OptionGrade.LOW)], "유물 목걸이 (1->3)"),
@@ -441,12 +449,12 @@ def main():
                     )
 
                 # 결과 출력
-                analyzer.print_analysis_results(results)
+                analyzer.analyzer.print_analysis_results(results)
 
                 # 파일로 저장
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 enhancement_type = ["0to1", "0to3", "1to3"][category]
-                filename = f"enhancement_analysis_{enhancement_type}_{grade.value}_{acc_type.value}_{timestamp}.txt"
+                filename = f"sim_result/enhancement_analysis_{enhancement_type}_{grade.value}_{acc_type.value}_{timestamp}.txt"
 
                 with open(filename, 'w', encoding='utf-8') as f:
                     original_stdout = sys.stdout
@@ -455,7 +463,7 @@ def main():
                     print(f"\n=== {desc} 분석 결과 ===")
                     print(f"분석 시간: {datetime.now()}")
                     print(f"시뮬레이션 횟수: 10,000")
-                    analyzer.print_analysis_results(results)
+                    analyzer.analyzer.print_analysis_results(results)
 
                     sys.stdout = original_stdout
 

@@ -196,18 +196,21 @@ def create_search_query(item, evaluation):
     return data
 
 def check_existance(item, evaluation):
-    headers = {"Content-Type": "application/json",
-                "Authorization": "bearer " + os.getenv('API_TOKEN_CHECKER')}
-    url = f"https://developer-lostark.game.onstove.com/auctions/items"
-    data = create_search_query(item, evaluation)
-    
-    response = requests.post(url, headers=headers, json=data)
+    try:
+        headers = {"Content-Type": "application/json",
+                    "Authorization": "bearer " + os.getenv('API_TOKEN_CHECKER')}
+        url = f"https://developer-lostark.game.onstove.com/auctions/items"
+        data = create_search_query(item, evaluation)
+        
+        response = requests.post(url, headers=headers, json=data)
 
-    if json.loads(response.text)["TotalCount"] > 0:
-        current_price = json.loads(response.text)["Items"][0]["AuctionInfo"]["BuyPrice"]
-        if current_price is not None and current_price <= evaluation['current_price']:
-            return True
-    return False
+        if json.loads(response.text)["TotalCount"] > 0:
+            current_price = json.loads(response.text)["Items"][0]["AuctionInfo"]["BuyPrice"]
+            if current_price is not None and current_price <= evaluation['current_price']:
+                return True
+        return False
+    except Exception as e:
+        return False
 
 def message_reflex(accept_queue, readback_queue, url):
     while True:

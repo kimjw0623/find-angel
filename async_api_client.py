@@ -211,14 +211,22 @@ class TokenBatchRequester:
             
             for idx, (index, result) in enumerate(zip(batch_indices, batch_results)):
                 try:
-                    # 정상적인 응답 처리
-                    if isinstance(result, dict):
-                        if result.get('rate_limited'):
-                            retry_indices.append(index)
-                        else:
-                            results[index] = result.get('data') if result else None
+                    # 성공적인 응답만 results에 저장, 나머지는 모두 재시도
+                    if isinstance(result, dict) and result.get('status') == 200:
+                        results[index] = result.get('data')
                     else:
-                        print(f"Request error at index {index}: {result}")
+                        # 에러 상황별 로깅
+                        if isinstance(result, dict):
+                            if result.get('rate_limited'):
+                                pass
+                                # print(f"Rate limit hit at index {index}")
+                            elif result.get('status'):
+                                print(f"HTTP {result['status']} error at index {index}")
+                            else:
+                                print(f"Unknown error format at index {index}: {result}")
+                        else:
+                            print(f"Invalid response at index {index}: {result}")
+                        
                         retry_indices.append(index)
                         
                 except Exception as e:

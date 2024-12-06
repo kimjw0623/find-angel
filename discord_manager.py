@@ -147,6 +147,30 @@ def format_multiline_message(item, evaluation):
     toSend += f"\\n만료 {item['AuctionInfo']['EndDate']}\\n```"
     return toSend
 
+def format_embed_message(item, evaluation):
+    toSend = {
+        "embeds": [
+            {
+                "type": "rich",
+                "color": 0xff0000,
+                "title": f"[{evaluation['grade']}] {item['Name']}",
+                "thumbnail": {"url": item["Icon"]},
+                "fields": [
+                    {
+                        "name": f"{evaluation['current_price']:,}골드",
+                        "value": f"거래 {item['AuctionInfo']['TradeAllowCount']}회"
+                    },
+                    {
+                        "name": f"연마 {evaluation['level']}회",
+                        "value": f"{evaluation['expected_price']:,}골드 ({evaluation['price_ratio']*100:.1f}%)"
+                    },
+                ]
+            }
+        ]
+    }
+    return toSend
+    
+
 def post_message(url, content, flags=0, wait=True):
     headers = {"Content-Type": "application/json"}
     data = f"""{{"content": "{content}", "flags": {flags}}}"""

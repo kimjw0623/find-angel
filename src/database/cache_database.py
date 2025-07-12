@@ -5,7 +5,7 @@ from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
 from contextlib import contextmanager
 import threading
 from datetime import datetime
-from base_database import BaseDatabaseManager
+from src.database.base_database import BaseDatabaseManager
 
 CacheBase = declarative_base()
 

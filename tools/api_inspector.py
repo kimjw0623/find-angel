@@ -13,8 +13,8 @@ import asyncio
 import os
 from datetime import datetime
 from typing import Dict, Any, Optional
-from async_api_client import TokenBatchRequester
-from config import config
+from src.api.async_api_client import TokenBatchRequester
+from src.common.config import config
 
 class APIInspector:
     def __init__(self):

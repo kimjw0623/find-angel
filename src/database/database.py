@@ -5,7 +5,7 @@ from contextlib import contextmanager
 import threading
 from datetime import datetime
 import os
-from base_database import BaseDatabaseManager
+from src.database.base_database import BaseDatabaseManager
 
 Base = declarative_base()
 

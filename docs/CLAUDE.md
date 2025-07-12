@@ -174,12 +174,70 @@ python backend.py --host 0.0.0.0 --port 8000
 - `utils.py`: 불필요한 import 및 클래스 제거
 - `config.py`: 통합 설정 관리 시스템 구축
 
+## 프로젝트 구조 (2025-07-04 정리)
+
+```
+find-angel/
+├── src/                        # 메인 소스 코드
+│   ├── core/                   # 핵심 기능
+│   │   ├── async_price_collector.py    # 가격 수집기
+│   │   ├── async_item_checker.py       # 실시간 매물 모니터
+│   │   ├── item_evaluator.py           # 아이템 평가 엔진
+│   │   └── market_price_cache.py       # 시장 가격 캐시 관리
+│   │
+│   ├── api/                    # API 관련
+│   │   ├── async_api_client.py         # 비동기 API 클라이언트
+│   │   └── backend.py                  # FastAPI 백엔드
+│   │
+│   ├── database/               # 데이터베이스
+│   │   ├── base_database.py            # 데이터베이스 기본 클래스
+│   │   ├── database.py                 # 메인 DB (원시 데이터)
+│   │   └── cache_database.py           # 캐시 DB (가공 데이터)
+│   │
+│   ├── notifications/          # 알림 시스템
+│   │   └── discord_manager.py          # Discord 웹훅 관리
+│   │
+│   └── common/                 # 공통 유틸리티
+│       ├── config.py                   # 통합 설정 관리
+│       └── utils.py                    # 유틸리티 함수
+│
+├── tools/                      # 도구 및 유틸리티
+│   ├── api_inspector.py                # API 테스트 도구
+│   ├── item_test.py                    # 아이템 평가 테스트
+│   ├── manual_cache_update.py          # 수동 캐시 업데이트
+│   ├── enhancement_simulator.py        # 연마 시뮬레이터
+│   ├── enhancement_sim_with_auction.py # 경매 연동 시뮬레이터
+│   └── abidos_search.py                # 아비도스 검색
+│
+├── frontend/                   # React 프론트엔드
+│   ├── src/
+│   │   ├── components/                 # UI 컴포넌트
+│   │   ├── pages/                      # 페이지 컴포넌트
+│   │   └── services/                   # API 서비스
+│   └── ...
+│
+├── data/                       # 데이터 파일
+│   ├── test_accessory_search.json
+│   ├── post_auctions_items_request.json
+│   └── get_auctions_options_response.json
+│
+├── docs/                       # 문서
+│   ├── README.md
+│   └── CLAUDE.md (이 파일)
+│
+├── scripts/                    # 실행 스크립트
+├── tests/                      # 테스트 코드
+├── .env                        # 환경 변수
+├── .gitignore
+└── requirements.txt
+
 ## 향후 개발 계획
 
 ### 단기 목표
 - 딜증 계산 기능 추가
 - 수동 검색 기능 구현
 - 대형 메서드 분해 (collect_prices, update_cache 등)
+- import 경로 수정 (구조 변경에 따른)
 
 ### 중기 목표
 - 데이터베이스 용량 최적화

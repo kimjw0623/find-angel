@@ -1,0 +1,15 @@
+# 로스트아크 API 및 웹 프레임워크
+aiohttp>=3.12.0
+fastapi>=0.104.0
+uvicorn>=0.24.0
+
+# 데이터베이스
+sqlalchemy>=2.0.0
+
+# 환경 변수 관리
+python-dotenv>=1.0.0
+
+# 개발 도구
+pytest>=7.0.0
+black>=23.0.0
+mypy>=1.0.0

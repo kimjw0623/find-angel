@@ -53,13 +53,20 @@
 ### 백엔드 실행
 ```bash
 # 가격 수집기 실행
-python async_price_collector.py
+./scripts/run_price_collector.sh
+# 또는: python -m src.core.async_price_collector
 
-# 실시간 모니터링 실행
-python async_item_checker.py
+# 실시간 모니터링 실행  
+./scripts/run_item_checker.sh
+# 또는: python -m src.core.async_item_checker
 
 # 웹 API 서버 실행
-python backend.py
+./scripts/run_backend.sh  
+# 또는: python -m src.api.backend
+
+# API 테스트 도구 실행
+./scripts/run_api_inspector.sh
+# 또는: python tools/api_inspector.py
 ```
 
 ### 프론트엔드 실행
@@ -129,13 +136,17 @@ npm start
 ### 개발 환경
 ```bash
 # 백엔드 개발 서버 실행
-python backend.py
+./scripts/run_backend.sh
 
 # 프론트엔드 개발 서버 실행
 cd frontend && npm start
 
-# 테스트 실행
-python -m pytest
+# API 테스트 도구 실행
+./scripts/run_api_inspector.sh
+
+# 개별 컴포넌트 테스트
+python tools/item_test.py
+python tools/manual_cache_update.py
 ```
 
 ### 배포 환경
@@ -144,10 +155,15 @@ python -m pytest
 cd frontend && npm run build
 
 # 백엔드 프로덕션 실행
-python backend.py --host 0.0.0.0 --port 8000
+python -m src.api.backend --host 0.0.0.0 --port 8000
 ```
 
-## 최근 리팩토링 작업 (2025-07-04)
+## 최근 리팩토링 작업 (2025-07-12)
+
+### 프로젝트 구조 대정리 
+- **디렉토리 구조 재설계**: 기능별 모듈을 논리적 구조로 재배치
+- **파일 분산 문제 해결**: 루트에 흩어진 파일들을 체계적으로 정리  
+- **Import 경로 전면 업데이트**: 모든 모듈의 import 구문을 새 구조에 맞게 수정
 
 ### 코드 정리 및 구조 개선
 - **old 폴더 정리**: 더 이상 사용하지 않는 동기 버전 코드들 제거
@@ -165,14 +181,21 @@ python backend.py --host 0.0.0.0 --port 8000
 - **하드코딩 제거**: 마법 숫자들을 의미 있는 설정값으로 대체
 - **타입 안정성**: 설정값 접근 패턴 일관성 확보
 
+### 개발 도구 개선
+- **API 인스펙터 개발**: JSON 기반으로 API 요청/응답 테스트 가능
+- **대화형 인터페이스**: 직관적인 명령어 시스템
+- **실행 스크립트 추가**: 각 컴포넌트별 독립 실행 스크립트 제공
+
 ### 새로 추가된 파일
-- `base_database.py`: 데이터베이스 매니저의 공통 기능 제공
+- `src/database/base_database.py`: 데이터베이스 매니저의 공통 기능 제공
+- `tools/api_inspector.py`: JSON 파일 기반 API 테스트 도구
+- `scripts/*.sh`: 컴포넌트별 실행 스크립트들
 
 ### 개선된 파일들
-- `database.py`: DatabaseManager 간소화 (60줄 → 6줄)
-- `cache_database.py`: CacheDBManager 간소화 (55줄 → 6줄)
-- `utils.py`: 불필요한 import 및 클래스 제거
-- `config.py`: 통합 설정 관리 시스템 구축
+- `src/database/database.py`: DatabaseManager 간소화 (60줄 → 6줄)
+- `src/database/cache_database.py`: CacheDBManager 간소화 (55줄 → 6줄)
+- `src/common/utils.py`: 불필요한 import 및 클래스 제거
+- `src/common/config.py`: 통합 설정 관리 시스템 구축
 
 ## 프로젝트 구조 (2025-07-04 정리)
 

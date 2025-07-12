@@ -1,7 +1,7 @@
 import re
 from database import *
 from market_price_cache import MarketPriceCache
-from item_checker import ItemEvaluator
+from item_evaluator import ItemEvaluator
 
 def parse_market_item(line: str) -> dict:
     """매물 정보 문자열을 아이템 딕셔너리로 변환"""

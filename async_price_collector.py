@@ -64,7 +64,7 @@ class AsyncPriceCollector:
         self.cache = DBMarketPriceCache(self.db)
         self.requester = TokenBatchRequester(tokens)
         self.current_cycle_id = None
-        self.ITEMS_PER_PAGE = 10
+        self.ITEMS_PER_PAGE = config.items_per_page
         
         # 프리셋 생성기 초기화
         self.preset_generator = SearchPresetGenerator()
@@ -75,7 +75,7 @@ class AsyncPriceCollector:
             try:
                 # 다음 실행 시간까지 대기
                 next_run = self._get_next_run_time()
-                wait_seconds = (next_run - datetime.now()).total_seconds() + 2 # 안전하게 2초 추가
+                wait_seconds = (next_run - datetime.now()).total_seconds() + config.time_settings["safety_buffer_seconds"]
                 if wait_seconds > 0:
                     print(f"다음 실행 시간: {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
                     print(f"대기 중... ({int(wait_seconds)}초)")
@@ -94,7 +94,7 @@ class AsyncPriceCollector:
                 
             except Exception as e:
                 print(f"Error in collection cycle: {e}")
-                await asyncio.sleep(60)
+                await asyncio.sleep(config.time_settings["error_retry_delay"])
 
     async def collect_prices(self):
         """비동기 가격 수집"""

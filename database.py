@@ -5,6 +5,7 @@ from contextlib import contextmanager
 import threading
 from datetime import datetime
 import os
+from base_database import BaseDatabaseManager
 
 Base = declarative_base()
 
@@ -125,62 +126,12 @@ class BraceletSpecialEffect(Base):
         Index('idx_effect_value', 'effect_type', 'value'),
     )
 
-class DatabaseManager:
-    _instance = None
-    _lock = threading.Lock()
+class DatabaseManager(BaseDatabaseManager):
+    def get_database_url(self) -> str:
+        return 'sqlite:///lostark_prices.db'
     
-    def __new__(cls):
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = super().__new__(cls)
-                    cls._instance.engine = create_engine('sqlite:///lostark_prices.db')
-                    # WAL 모드 활성화로 읽기/쓰기 동시성 개선
-                    with cls._instance.engine.connect() as conn:
-                        conn.execute(text("PRAGMA journal_mode=WAL"))
-                    cls._instance.Session = sessionmaker(bind=cls._instance.engine)
-                    # 데이터베이스 및 테이블 생성
-                    Base.metadata.create_all(cls._instance.engine)
-        return cls._instance  # 이 부분이 첫 번째 if문 밖에 있었네요
-
-    @contextmanager
-    def get_session(self):
-        """일반 세션을 생성하고 자동으로 닫아주는 컨텍스트 매니저"""
-        session = self.Session()
-        try:
-            yield session
-            session.commit()
-        except Exception as e:
-            session.rollback()
-            raise e
-        finally:
-            session.close()
-
-    @contextmanager
-    def get_read_session(self):
-        """읽기 전용 세션 - 다른 읽기 작업과 동시 실행 가능"""
-        session = self.Session()
-        try:
-            session.execute(text("BEGIN"))  # text() 함수로 감싸기
-            yield session
-        finally:
-            session.rollback()  # 읽기 전용이므로 rollback으로 트랜잭션 종료
-            session.close()
-
-    @contextmanager
-    def get_write_session(self):
-        """쓰기 세션 - 더 엄격한 락킹 적용"""
-        with self._lock:  # 스레드 레벨 락킹
-            session = self.Session()
-            try:
-                session.execute(text("BEGIN EXCLUSIVE"))  # text() 함수로 감싸기
-                yield session
-                session.commit()
-            except Exception as e:
-                session.rollback()
-                raise e
-            finally:
-                session.close()
+    def get_base_metadata(self):
+        return Base.metadata
 
 def init_database():
     """데이터베이스 초기 설정 및 테이블 생성"""

@@ -67,7 +67,3 @@ class CacheDBManager(BaseDatabaseManager):
     def get_base_metadata(self):
         return CacheBase.metadata
 
-def init_cache_database():
-    """캐시 데이터베이스 초기 설정 및 테이블 생성"""
-    db_manager = CacheDBManager()
-    return db_manager

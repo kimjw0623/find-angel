@@ -48,7 +48,7 @@ def convert_json_keys_to_int(obj):
 class DBMarketPriceCache:
     def __init__(self, main_db_manager: DatabaseManager, debug: bool = False):
         self.main_db = main_db_manager  # 기존 DB (데이터 읽기용)
-        self.cache_db = init_cache_database()  # 캐시 전용 DB
+        self.cache_db = CacheDBManager()  # 캐시 전용 DB
         self.debug = debug
         self.cache = {}  # 메모리 캐시
         self._load_cache()

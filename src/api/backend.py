@@ -39,7 +39,7 @@ def get_search_cycle_id_range(range_str: str) -> str:
 
 class DataService:
     def __init__(self):
-        self.cache_db = init_cache_database()
+        self.cache_db = CacheDBManager()
 
     def get_price_trends(self, 
                         role: Optional[str] = None, 

@@ -133,7 +133,3 @@ class DatabaseManager(BaseDatabaseManager):
     def get_base_metadata(self):
         return Base.metadata
 
-def init_database():
-    """데이터베이스 초기 설정 및 테이블 생성"""
-    db_manager = DatabaseManager()
-    return db_manager

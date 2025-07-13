@@ -364,7 +364,7 @@ class EnhancementAnalyzer:
             }
 
 def main():
-    db_manager = init_database()
+    db_manager = DatabaseManager()
     analyzer = EnhancementStrategyAnalyzer(db_manager, debug=False)
 
     test_cases = [

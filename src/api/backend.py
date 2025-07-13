@@ -3,8 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
 from datetime import datetime
 import json
-from src.database.cache_database import *
-from src.database.cache_database import AccessoryPricePattern, BraceletPricePattern
+from src.database.pattern_database import *
+from src.database.pattern_database import AccessoryPricePattern, BraceletPricePattern
 from datetime import datetime, timedelta
 from typing import Dict, List
 

@@ -4,7 +4,7 @@ import asyncio
 from src.api.async_api_client import TokenBatchRequester
 from src.core.market_price_cache import DBMarketPriceCache
 from itertools import combinations, product
-from src.database.database import *
+from src.database.raw_database import *
 from src.common.utils import *
 from src.common.config import config
 

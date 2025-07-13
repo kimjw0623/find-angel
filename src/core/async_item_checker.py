@@ -2,7 +2,7 @@ from typing import Dict, Optional, List
 import asyncio
 from datetime import datetime, timedelta
 from src.api.async_api_client import TokenBatchRequester
-from src.database.database import DatabaseManager
+from src.database.raw_database import DatabaseManager
 from src.core.market_price_cache import DBMarketPriceCache
 from src.notifications.discord_manager import send_discord_message, init_discord_manager
 import multiprocessing as mp

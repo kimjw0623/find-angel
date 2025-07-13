@@ -1,5 +1,5 @@
 import re
-from src.database.database import *
+from src.database.raw_database import *
 from src.core.market_price_cache import MarketPriceCache
 from src.core.item_evaluator import ItemEvaluator
 

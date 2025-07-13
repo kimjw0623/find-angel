@@ -1,0 +1,31 @@
+{
+  "ItemLevelMin": 0,
+  "ItemLevelMax": 0,
+  "ItemGradeQuality": null,
+  "ItemUpgradeLevel": null,
+  "ItemTradeAllowCount": null,
+  "SkillOptions": [
+    {
+      "FirstOption": null,
+      "SecondOption": null,
+      "MinValue": null,
+      "MaxValue": null
+    }
+  ],
+  "EtcOptions": [
+    {
+      "FirstOption": null,
+      "SecondOption": null,
+      "MinValue": null,
+      "MaxValue": null
+    }
+  ],
+  "Sort": "BIDSTART_PRICE",
+  "CategoryCode": 200000,
+  "CharacterClass": "",
+  "ItemTier": 4,
+  "ItemGrade": "고대",
+  "ItemName": "",
+  "PageNo": 1,
+  "SortCondition": "ASC"
+}

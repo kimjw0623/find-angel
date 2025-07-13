@@ -9,31 +9,55 @@ JSON 파일을 준비해서 API 요청을 테스트할 수 있습니다.
 """
 
 import json
+import aiohttp
 import asyncio
 import os
 from datetime import datetime
 from typing import Dict, Any, Optional
-from src.api.async_api_client import TokenBatchRequester
 from src.common.config import config
 
 class APIInspector:
     def __init__(self):
-        self.requester = TokenBatchRequester(config.price_tokens)
+        self.config = config
         self.api_base = config.api_base_url
         self.auction_endpoint = config.api_auction_endpoint
+        # 첫 번째 토큰을 테스트용으로 사용
+        self.test_token = config.price_tokens[0] if config.price_tokens else None
         
     def print_json(self, data: Any, title: str = ""):
-        """JSON 데이터를 예쁘게 출력"""
+        """JSON 데이터를 보기 좋게 출력"""
         if title:
-            print(f"\n{'='*60}")
-            print(f"📋 {title}")
-            print('='*60)
+            print(f"\n📋 {title}")
+            print("=" * 60)
         print(json.dumps(data, ensure_ascii=False, indent=2))
         
     def list_json_files(self) -> list:
-        """현재 디렉토리의 JSON 파일 목록을 반환"""
-        json_files = [f for f in os.listdir('.') if f.endswith('.json')]
-        return sorted(json_files)
+        """현재 디렉토리의 JSON 파일 목록 반환"""
+        return [f for f in os.listdir('.') if f.endswith('.json')]
+    
+    async def send_single_request(self, url: str, data: Dict) -> Dict:
+        """단일 API 요청 전송"""
+        headers = {
+            'accept': 'application/json',
+            'authorization': f"bearer {self.test_token}",
+            'content-Type': 'application/json'
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.post(url, json=data, headers=headers) as response:
+                    response_data = await response.json()
+                    
+                    return {
+                        'status': response.status,
+                        'data': response_data,
+                        'headers': dict(response.headers)
+                    }
+            except aiohttp.ClientError as e:
+                return {
+                    'status': 0,
+                    'error': str(e)
+                }
     
     async def send_request_from_json(self, json_file: str, endpoint: Optional[str] = None):
         """JSON 파일을 읽어서 API 요청 전송"""
@@ -42,40 +66,37 @@ class APIInspector:
             with open(json_file, 'r', encoding='utf-8') as f:
                 request_data = json.load(f)
             
-            print(f"\n📄 파일: {json_file}")
+            print(f"\n📄 {json_file} 파일을 읽었습니다.")
             self.print_json(request_data, "요청 데이터")
             
-            # 엔드포인트 결정
+            # 엔드포인트 설정
             if endpoint is None:
                 endpoint = self.auction_endpoint
             
             full_url = self.api_base + endpoint
             print(f"\n🌐 URL: {full_url}")
             
+            # 토큰 확인
+            if not self.test_token:
+                print("❌ API 토큰이 설정되지 않았습니다. .env 파일을 확인하세요.")
+                return
+            
             # 요청 전송
+            print("\n🚀 API 요청을 전송합니다...")
             start_time = datetime.now()
-            response = await self.requester.process_requests([{
-                'url': full_url,
-                'data': request_data
-            }])
+            result = await self.send_single_request(full_url, request_data)
             end_time = datetime.now()
             
             print(f"⏱️  응답 시간: {(end_time - start_time).total_seconds():.2f}초")
+            print(f"📊 응답 상태: {result['status']}")
             
-            if response and len(response) > 0:
-                result = response[0]
-                
-                # 에러 체크
-                if 'error' in result:
-                    print(f"\n❌ API 에러:")
-                    self.print_json(result['error'])
-                    return
-                
-                # 성공 응답 출력
-                self.print_json(result, "응답 데이터")
+            # 응답 처리
+            if result['status'] == 200:
+                print("\n✅ 요청 성공!")
+                self.print_json(result['data'], "응답 데이터")
                 
                 # 응답 구조 분석
-                self.analyze_response(result)
+                self.analyze_response(result['data'])
                 
                 # 응답 저장 옵션
                 save = input("\n💾 응답을 파일로 저장하시겠습니까? (y/n): ").strip().lower()
@@ -83,11 +104,15 @@ class APIInspector:
                     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                     output_file = f"response_{timestamp}.json"
                     with open(output_file, 'w', encoding='utf-8') as f:
-                        json.dump(result, f, ensure_ascii=False, indent=2)
+                        json.dump(result['data'], f, ensure_ascii=False, indent=2)
                     print(f"✅ 응답이 {output_file}에 저장되었습니다.")
                     
+            elif result['status'] == 0:
+                print(f"\n❌ 연결 에러: {result.get('error', 'Unknown error')}")
             else:
-                print("❌ 응답이 없거나 빈 응답입니다.")
+                print(f"\n❌ HTTP {result['status']} 에러")
+                if 'data' in result:
+                    self.print_json(result['data'], "에러 응답")
                 
         except FileNotFoundError:
             print(f"❌ 파일을 찾을 수 없습니다: {json_file}")
@@ -95,6 +120,8 @@ class APIInspector:
             print(f"❌ JSON 파싱 에러: {e}")
         except Exception as e:
             print(f"❌ 예상치 못한 에러: {e}")
+            import traceback
+            traceback.print_exc()
     
     def analyze_response(self, response: Dict):
         """응답 구조 분석"""
@@ -178,24 +205,21 @@ class APIInspector:
                     print("\n지원 엔드포인트:")
                     print("  /auctions/items (기본)")
                     print("  /auctions/options")
-                    
-                elif command.strip() == '':
-                    continue
+                    print("  /markets/items/{itemId}")
+                    print("  /markets/options")
                     
                 else:
-                    print("❌ 알 수 없는 명령입니다. 'help'를 입력해보세요.")
+                    print("❌ 알 수 없는 명령어입니다. 'help'를 입력해 도움말을 확인하세요.")
                     
             except KeyboardInterrupt:
-                print("\n👋 종료합니다.")
+                print("\n\n👋 종료합니다.")
                 break
             except Exception as e:
-                print(f"❌ 예상치 못한 에러: {e}")
+                print(f"❌ 에러 발생: {e}")
 
 async def main():
-    """메인 함수"""
     inspector = APIInspector()
     await inspector.interactive_mode()
 
 if __name__ == "__main__":
-    print("🚀 로스트아크 API 인스펙터를 시작합니다...")
     asyncio.run(main())

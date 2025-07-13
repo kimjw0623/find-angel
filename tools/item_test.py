@@ -105,7 +105,7 @@ def parse_market_item(line: str) -> dict:
 
 def main():
     # 데이터베이스 매니저와 평가기 초기화
-    db_manager = DatabaseManager()
+    db_manager = RawDatabaseManager()
     price_cache = MarketPriceCache(db_manager, debug=True)
     evaluator = ItemEvaluator(price_cache, debug=True)
     

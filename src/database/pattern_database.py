@@ -60,7 +60,7 @@ class BraceletPricePattern(CacheBase):
         Index('idx_bracelet_pattern_search', 'cache_id', 'grade', 'pattern_type'),
     )
 
-class CacheDBManager(BaseDatabaseManager):
+class PatternDatabaseManager(BaseDatabaseManager):
     def get_database_url(self) -> str:
         return 'sqlite:///lostark_cache.db'
     

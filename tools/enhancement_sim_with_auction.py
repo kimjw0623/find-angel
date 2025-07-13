@@ -9,7 +9,7 @@ import sys, os
 import numpy as np
 
 class EnhancementStrategyAnalyzer:
-    def __init__(self, db_manager: DatabaseManager, debug: bool = False):
+    def __init__(self, db_manager: RawDatabaseManager, debug: bool = False):
         self.analyzer = EnhancementAnalyzer(db_manager, debug)
         self.simulator = EnhancementSimulator()
         self.debug = debug
@@ -77,7 +77,7 @@ class EnhancementStrategyAnalyzer:
         return self.analyzer._analyze_patterns(results, acc_type, grade, quality)
     
 class EnhancementAnalyzer:
-    def __init__(self, db_manager: DatabaseManager, debug: bool = False):
+    def __init__(self, db_manager: RawDatabaseManager, debug: bool = False):
         self.debug = debug
         self.price_cache = DBMarketPriceCache(db_manager, debug=debug)
         self.evaluator = ItemEvaluator(self.price_cache, debug=debug)
@@ -364,7 +364,7 @@ class EnhancementAnalyzer:
             }
 
 def main():
-    db_manager = DatabaseManager()
+    db_manager = RawDatabaseManager()
     analyzer = EnhancementStrategyAnalyzer(db_manager, debug=False)
 
     test_cases = [

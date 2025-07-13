@@ -2,7 +2,7 @@ from typing import Dict, Optional, List
 import asyncio
 from datetime import datetime, timedelta
 from src.api.async_api_client import TokenBatchRequester
-from src.database.raw_database import DatabaseManager
+from src.database.raw_database import RawDatabaseManager
 from src.core.market_price_cache import DBMarketPriceCache
 from src.notifications.discord_manager import send_discord_message, init_discord_manager
 import multiprocessing as mp
@@ -146,7 +146,7 @@ class AsyncMarketScanner:
 
 class AsyncMarketMonitor:
     def __init__(self, msg_queue: mp.Queue, tokens: List[str], debug: bool = False):
-        db_manager = DatabaseManager()
+        db_manager = RawDatabaseManager()
         price_cache = DBMarketPriceCache(db_manager, debug=debug)
         self.evaluator = ItemEvaluator(price_cache, debug=debug)
         self.scanner = AsyncMarketScanner(self.evaluator, tokens, msg_queue)

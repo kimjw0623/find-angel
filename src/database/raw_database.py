@@ -126,7 +126,7 @@ class BraceletSpecialEffect(Base):
         Index('idx_effect_value', 'effect_type', 'value'),
     )
 
-class DatabaseManager(BaseDatabaseManager):
+class RawDatabaseManager(BaseDatabaseManager):
     def get_database_url(self) -> str:
         return 'sqlite:///lostark_prices.db'
     

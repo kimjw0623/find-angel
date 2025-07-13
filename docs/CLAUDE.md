@@ -192,8 +192,8 @@ python -m src.api.backend --host 0.0.0.0 --port 8000
 - `scripts/*.sh`: 컴포넌트별 실행 스크립트들
 
 ### 개선된 파일들
-- `src/database/database.py`: DatabaseManager 간소화 (60줄 → 6줄)
-- `src/database/cache_database.py`: CacheDBManager 간소화 (55줄 → 6줄)
+- `src/database/raw_database.py`: RawDatabaseManager 간소화 (60줄 → 6줄)
+- `src/database/pattern_database.py`: PatternDatabaseManager 간소화 (55줄 → 6줄)
 - `src/common/utils.py`: 불필요한 import 및 클래스 제거
 - `src/common/config.py`: 통합 설정 관리 시스템 구축
 

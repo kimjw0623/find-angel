@@ -59,7 +59,7 @@ def _create_bracelet_hash_key(item_data: dict) -> tuple:
     return base_key + (combat_stats, base_stats, special_effects)
 
 class AsyncPriceCollector:
-    def __init__(self, db_manager: DatabaseManager, tokens: List[str]):
+    def __init__(self, db_manager: RawDatabaseManager, tokens: List[str]):
         self.db = db_manager
         self.cache = DBMarketPriceCache(self.db)
         self.requester = TokenBatchRequester(tokens)
@@ -884,7 +884,7 @@ class SearchPresetGenerator:
         return data
 
 async def main():
-    db_manager = DatabaseManager()   
+    db_manager = RawDatabaseManager()   
     collector = AsyncPriceCollector(db_manager, tokens=config.price_tokens)
     await collector.run()
 

@@ -1,12 +1,12 @@
-from src.database.raw_database import DatabaseManager, PriceRecord
-from src.database.pattern_database import CacheDBManager, MarketPriceCache
+from src.database.raw_database import RawDatabaseManager, PriceRecord
+from src.database.pattern_database import PatternDatabaseManager, MarketPriceCache
 from datetime import datetime, timedelta
 import time
 from src.core.market_price_cache import DBMarketPriceCache
 
 def main():
-    db_manager = DatabaseManager()
-    cache_db = CacheDBManager()
+    db_manager = RawDatabaseManager()
+    cache_db = PatternDatabaseManager()
     cache = DBMarketPriceCache(db_manager, debug=False)
 
     # search_cycle_id로만 조회하고 정렬

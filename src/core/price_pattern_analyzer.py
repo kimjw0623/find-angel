@@ -48,10 +48,10 @@ def convert_json_keys_to_int(obj):
 class PricePatternAnalyzer:
     def __init__(self, main_db_manager: RawDatabaseManager, debug: bool = False):
         self.main_db = main_db_manager  # 기존 DB (데이터 읽기용)
-        self.memory_cache_db = PatternDatabaseManager()  # 캐시 전용 DB
+        self.pattern_db = PatternDatabaseManager()  # 패턴 데이터베이스
         self.debug = debug
-        self.memory_cache = {}  # 메모리 캐시
-        self._load_cache()
+        self.memory_patterns = {}  # 메모리 패턴 저장소
+        self._load_patterns()
 
         self.EXCLUSIVE_OPTIONS = {
             "목걸이": {
@@ -79,16 +79,16 @@ class PricePatternAnalyzer:
             "아군보호막": [0.95, 2.1, 3.5]
         }
 
-    def _load_cache(self):
-        """현재 활성화된 캐시 데이터 로드"""
-        with self.memory_cache_db.get_read_session() as session:
+    def _load_patterns(self):
+        """현재 활성화된 패턴 데이터 로드"""
+        with self.pattern_db.get_read_session() as session:
             # 활성화된 캐시 찾기
-            active_cache = session.query(MarketPriceCache).filter_by(is_active=True).first()
+            active_pattern = session.query(MarketPricePattern).filter_by(is_active=True).first()
             
-            if not active_cache:
+            if not active_pattern:
                 if self.debug:
-                    print("No active cache found, initializing empty cache")
-                self.memory_cache = {
+                    print("No active pattern found, initializing empty patterns")
+                self.memory_patterns = {
                     "dealer": {},
                     "support": {},
                     "bracelet_고대": {},
@@ -98,16 +98,16 @@ class PricePatternAnalyzer:
 
             # 악세서리 패턴 로드
             accessory_patterns = session.query(AccessoryPricePattern).filter_by(
-                cache_id=active_cache.cache_id
+                pattern_id=active_pattern.pattern_id
             ).all()
 
             # 팔찌 패턴 로드
             bracelet_patterns = session.query(BraceletPricePattern).filter_by(
-                cache_id=active_cache.cache_id
+                pattern_id=active_pattern.pattern_id
             ).all()
 
             # 캐시 데이터 구성
-            self.memory_cache = {
+            self.memory_patterns = {
                 "dealer": {},
                 "support": {},
                 "bracelet_고대": {},
@@ -116,7 +116,7 @@ class PricePatternAnalyzer:
 
             # 악세서리 패턴 처리
             for pattern in accessory_patterns:
-                cache_key = f"{pattern.grade}:{pattern.part}:{pattern.level}:{pattern.pattern_key}"
+                pattern_key = f"{pattern.grade}:{pattern.part}:{pattern.level}:{pattern.pattern_key}"
                 # JSON 로드 시 숫자 키를 float, int로 각각 변환
                 converted_common_option_values = convert_json_keys_to_float(json.loads(pattern.common_option_values))
                 converted_base_prices = convert_json_keys_to_int(json.loads(pattern.quality_prices))
@@ -125,13 +125,13 @@ class PricePatternAnalyzer:
                     'quality_prices': converted_base_prices,
                     'common_option_values': converted_common_option_values,
                     'total_sample_count': pattern.total_sample_count,
-                    'last_update': active_cache.search_cycle_id
+                    'last_update': active_pattern.search_cycle_id
                 }
                 
                 if pattern.role == 'dealer':
-                    self.memory_cache['dealer'][cache_key] = pattern_data
+                    self.memory_patterns['dealer'][pattern_key] = pattern_data
                 else:
-                    self.memory_cache['support'][cache_key] = pattern_data
+                    self.memory_patterns['support'][pattern_key] = pattern_data
 
             # 팔찌 패턴 처리
             for pattern in bracelet_patterns:
@@ -140,51 +140,51 @@ class PricePatternAnalyzer:
                     pattern.base_stats,
                     pattern.extra_slots
                 )
-                bracelet_cache_first_key = f'bracelet_{pattern.grade}'
+                bracelet_pattern_first_key = f'bracelet_{pattern.grade}'
                 try:
-                    self.memory_cache[bracelet_cache_first_key][pattern.pattern_type][pattern_key] = pattern.price, pattern.total_sample_count
+                    self.memory_patterns[bracelet_pattern_first_key][pattern.pattern_type][pattern_key] = pattern.price, pattern.total_sample_count
                 except KeyError:
-                    self.memory_cache[bracelet_cache_first_key][pattern.pattern_type] = {}
-                    self.memory_cache[bracelet_cache_first_key][pattern.pattern_type][pattern_key] = pattern.price, pattern.total_sample_count
+                    self.memory_patterns[bracelet_pattern_first_key][pattern.pattern_type] = {}
+                    self.memory_patterns[bracelet_pattern_first_key][pattern.pattern_type][pattern_key] = pattern.price, pattern.total_sample_count
 
             if self.debug:
-                print(f"Cache loaded. Last update: {active_cache.search_cycle_id}")
-                print(f"Dealer cache entries: {len(self.memory_cache['dealer'])}")
-                print(f"Support cache entries: {len(self.memory_cache['support'])}")
-                print(f"고대 팔찌 cache entries: {len(self.memory_cache['bracelet_고대'])}")
-                print(f"유물 팔찌 cache entries: {len(self.memory_cache['bracelet_유물'])}")
+                print(f"Patterns loaded. Last update: {active_pattern.search_cycle_id}")
+                print(f"Dealer pattern entries: {len(self.memory_patterns['dealer'])}")
+                print(f"Support pattern entries: {len(self.memory_patterns['support'])}")
+                print(f"고대 팔찌 pattern entries: {len(self.memory_patterns['bracelet_고대'])}")
+                print(f"유물 팔찌 pattern entries: {len(self.memory_patterns['bracelet_유물'])}")
 
     def get_last_update_time(self) -> Optional[datetime]:
         """캐시의 마지막 업데이트 시간 확인"""
-        with self.memory_cache_db.get_read_session() as session:
-            active_cache = session.query(MarketPriceCache).filter_by(is_active=True).first()
-            return active_cache.search_cycle_id if active_cache else None
+        with self.pattern_db.get_read_session() as session:
+            active_pattern = session.query(MarketPricePattern).filter_by(is_active=True).first()
+            return active_pattern.search_cycle_id if active_pattern else None
 
     def get_price_data(self, grade: str, part: str, level: int, 
                       options: Dict[str, List[Tuple[str, float]]]) -> Dict[str, Optional[Dict]]:
         """가격 데이터 조회"""            
-        dealer_key, support_key = self.get_cache_key(grade, part, level, options)
+        dealer_key, support_key = self.get_pattern_key(grade, part, level, options)
         
-        cache_data = {
+        pattern_data = {
             "dealer": None,
             "support": None
         }
 
-        if dealer_key and dealer_key in self.memory_cache["dealer"]:
-            cache_data["dealer"] = self.memory_cache["dealer"][dealer_key]
+        if dealer_key and dealer_key in self.memory_patterns["dealer"]:
+            pattern_data["dealer"] = self.memory_patterns["dealer"][dealer_key]
             if self.debug:
-                print(f"\nDealer cache hit for {dealer_key}")
-                print(f"Base price: {cache_data['dealer']['base_price']:,}")
-                print(f"Sample count: {cache_data['dealer']['sample_count']}")
+                print(f"\nDealer pattern hit for {dealer_key}")
+                print(f"Base price: {pattern_data['dealer']['base_price']:,}")
+                print(f"Sample count: {pattern_data['dealer']['sample_count']}")
 
-        if support_key and support_key in self.memory_cache["support"]:
-            cache_data["support"] = self.memory_cache["support"][support_key]
+        if support_key and support_key in self.memory_patterns["support"]:
+            pattern_data["support"] = self.memory_patterns["support"][support_key]
             if self.debug:
-                print(f"\nSupport cache hit for {support_key}")
-                print(f"Base price: {cache_data['support']['base_price']:,}")
-                print(f"Sample count: {cache_data['support']['sample_count']}")
+                print(f"\nSupport pattern hit for {support_key}")
+                print(f"Base price: {pattern_data['support']['base_price']:,}")
+                print(f"Sample count: {pattern_data['support']['sample_count']}")
 
-        return cache_data
+        return pattern_data
 
     def get_bracelet_price(self, grade: str, item_data: Dict) -> Optional[int]:
         """팔찌 가격 조회"""
@@ -197,16 +197,16 @@ class PricePatternAnalyzer:
         key = (details['pattern'], details['values'], details['extra_slots'])
 
         # 캐시에서 해당 패턴의 가격 조회
-        cache_key = f"bracelet_{grade}"
+        pattern_key = f"bracelet_{grade}"
 
         # 1. 기본적인 캐시 존재 여부 확인
-        if cache_key not in self.memory_cache:
+        if pattern_key not in self.memory_patterns:
             if self.debug:
-                print(f"No cache data found for {cache_key}")
+                print(f"No pattern data found for {pattern_key}")
             return None
 
         # 2. 해당 패턴 타입의 가격 데이터 가져오기
-        pattern_prices = self.memory_cache[cache_key].get(pattern_type, {})
+        pattern_prices = self.memory_patterns[pattern_key].get(pattern_type, {})
 
         # 3. 정확한 매칭 시도
         if key in pattern_prices:
@@ -218,15 +218,15 @@ class PricePatternAnalyzer:
 
         # 4. 정확한 매칭이 없는 경우 비슷한 패턴 찾기
         # (기존 비슷한 패턴 찾기 로직 유지)
-        for cached_key, (price, total_sample_count) in pattern_prices.items():
-            cached_pattern, cached_values, cached_extra = cached_key
-            if (cached_pattern == details['pattern'] and 
-                cached_extra == details['extra_slots']):
-                if self._is_similar_values(cached_values, details['values'], pattern_type):
+        for stored_key, (price, total_sample_count) in pattern_prices.items():
+            stored_pattern, stored_values, stored_extra = stored_key
+            if (stored_pattern == details['pattern'] and 
+                stored_extra == details['extra_slots']):
+                if self._is_similar_values(stored_values, details['values'], pattern_type):
                     if self.debug:
                         print(f"\nSimilar pattern match found:")
                         print(f"Original pattern: {pattern_type} {key}")
-                        print(f"Matched pattern: {pattern_type} {cached_key}")
+                        print(f"Matched pattern: {pattern_type} {stored_key}")
                         print(f"Price: {price:,}")
                     return (price, total_sample_count)
 
@@ -235,7 +235,7 @@ class PricePatternAnalyzer:
 
         return None
 
-    def update_cache(self, search_cycle_id: str) -> bool:
+    def update_pattern(self, search_cycle_id: str) -> bool:
         """
         특정 search_cycle의 시장 가격 데이터로 캐시 업데이트
         
@@ -247,11 +247,14 @@ class PricePatternAnalyzer:
         """
         try:
             # 로그 파일 설정
-            print(f"\nUpdating price cache for search cycle {search_cycle_id}")
-            log_filename = f'price_log/price_calculation_{search_cycle_id}.log'
+            print(f"\nUpdating price patterns for search cycle {search_cycle_id}")
+            log_filename = f'pattern_log/pattern_calculation_{search_cycle_id}.log'
+            
+            # pattern_log 디렉토리 생성
+            os.makedirs('pattern_log', exist_ok=True)
 
             with redirect_stdout(log_filename):
-                new_cache = {
+                new_patterns = {
                     "dealer": {},
                     "support": {},
                     "bracelet_고대": {},
@@ -333,60 +336,60 @@ class PricePatternAnalyzer:
                         if len(items) >= 3:  # 최소 3개 이상의 데이터가 있는 경우만
                             price_data = self._calculate_group_prices(items, key, "dealer")
                             if price_data:
-                                new_cache["dealer"][key] = price_data
+                                new_patterns["dealer"][key] = price_data
 
                     for key, items in support_groups.items():
                         if len(items) >= 3:
                             price_data = self._calculate_group_prices(items, key, "support")
                             if price_data:
-                                new_cache["support"][key] = price_data
+                                new_patterns["support"][key] = price_data
 
                     print(f"Calculating acc group prices duration: {datetime.now() - start_time}")
 
                     # 팔찌 가격 업데이트
                     for grade in ["고대", "유물"]:
-                        cache_key = f"bracelet_{grade}"
-                        new_cache[cache_key] = self._calculate_bracelet_prices(grade, search_cycle_id)
+                        pattern_key = f"bracelet_{grade}"
+                        new_patterns[pattern_key] = self._calculate_bracelet_prices(grade, search_cycle_id)
                         
-                # 새로운 캐시 ID 생성
-                new_cache_id = str(uuid.uuid4())
+                # 새로운 패턴 ID 생성
+                new_pattern_id = str(uuid.uuid4())
                 start_time = datetime.now()
 
-                with self.memory_cache_db.get_write_session() as write_session:
+                with self.pattern_db.get_write_session() as write_session:
                     # 가장 최근 search_cycle인지 확인
-                    latest_cycle = write_session.query(MarketPriceCache.search_cycle_id)\
-                        .order_by(MarketPriceCache.search_cycle_id.desc())\
+                    latest_cycle = write_session.query(MarketPricePattern.search_cycle_id)\
+                        .order_by(MarketPricePattern.search_cycle_id.desc())\
                         .first()
                     
                     # 테이블이 비어있거나, 현재 cycle이 더 최신인 경우 True
                     is_latest = not latest_cycle or latest_cycle.search_cycle_id <= search_cycle_id
                     
                     print(f"Latest cycle id: {latest_cycle.search_cycle_id if latest_cycle else 'None'}")
-                    print(f"Current cache id: {search_cycle_id}")
+                    print(f"Current pattern id: {search_cycle_id}")
                     print(f"Is latest: {is_latest}")
 
-                    # 새 캐시 메타데이터 생성
-                    new_cache_entry = MarketPriceCache(
-                        cache_id=new_cache_id,
+                    # 새 패턴 메타데이터 생성
+                    new_pattern_entry = MarketPricePattern(
+                        pattern_id=new_pattern_id,
                         search_cycle_id=search_cycle_id,  # timestamp 대신 search_cycle_id 사용
                         is_active=is_latest
                     )
 
                     if is_latest:
-                        # 기존 활성 캐시 비활성화
-                        write_session.query(MarketPriceCache).filter_by(is_active=True).update(
+                        # 기존 활성 패턴 비활성화
+                        write_session.query(MarketPricePattern).filter_by(is_active=True).update(
                             {"is_active": False}
                         )
-                    write_session.add(new_cache_entry)
+                    write_session.add(new_pattern_entry)
                     write_session.flush()
 
                     # 악세서리 패턴 저장
                     for role in ['dealer', 'support']:
-                        for cache_key, pattern_data in new_cache[role].items():
-                            grade, part, level, pattern_key = cache_key.split(':')
+                        for pattern_key, pattern_data in new_patterns[role].items():
+                            grade, part, level, pattern_key = pattern_key.split(':')
                             
                             acc_pattern = AccessoryPricePattern(
-                                cache_id=new_cache_id,
+                                pattern_id=new_pattern_id,
                                 grade=grade,
                                 part=part,
                                 level=level,
@@ -400,13 +403,13 @@ class PricePatternAnalyzer:
 
                     # 팔찌 패턴 저장
                     for grade in ['고대', '유물']:
-                        bracelet_data = new_cache[f'bracelet_{grade}']
+                        bracelet_data = new_patterns[f'bracelet_{grade}']
                         for pattern_type, patterns in bracelet_data.items():
                             for pattern_key, (price, total_sample_count) in patterns.items():
                                 combat_stats, base_stats, extra_slots = pattern_key
                                 
                                 bracelet_pattern = BraceletPricePattern(
-                                    cache_id=new_cache_id,
+                                    pattern_id=new_pattern_id,
                                     grade=grade,
                                     pattern_type=pattern_type,
                                     combat_stats=combat_stats,
@@ -417,18 +420,18 @@ class PricePatternAnalyzer:
                                 )
                                 write_session.add(bracelet_pattern)
 
-                    print(f"Writing cache duration: {datetime.now() - start_time}")
+                    print(f"Writing patterns duration: {datetime.now() - start_time}")
 
-                print(f"Cache created with ID {new_cache_id} for search cycle {search_cycle_id}")
+                print(f"Pattern collection created with ID {new_pattern_id} for search cycle {search_cycle_id}")
                 return True
 
         except Exception as e:
-            print(f"Error updating price cache: {e}")
+            print(f"Error updating price patterns: {e}")
             import traceback
             traceback.print_exc()
             return False
 
-    def get_cache_key(self, grade: str, part: str, level: int, options: Dict[str, List[Tuple[str, float]]]) -> Tuple[str, str]:
+    def get_pattern_key(self, grade: str, part: str, level: int, options: Dict[str, List[Tuple[str, float]]]) -> Tuple[str, str]:
         """캐시 키 생성 - exclusive 옵션만 사용"""
         dealer_exclusive = sorted([
             (opt[0], opt[1]) for opt in options["dealer_exclusive"]
@@ -844,7 +847,7 @@ class PricePatternAnalyzer:
                 return adjusted_thresholds[max(0, adjusted_thresholds.index(threshold) - 1)]
         return adjusted_thresholds[-1]
 
-    def _is_similar_values(self, cached_values: str, target_values: str, pattern_type: str = None) -> bool:
+    def _is_similar_values(self, stored_values: str, target_values: str, pattern_type: str = None) -> bool:
         """
         값들이 충분히 비슷한지 확인
         전투특성은 10, 기본스탯은 1600 단위로 비교
@@ -852,38 +855,38 @@ class PricePatternAnalyzer:
         try:
             if self.debug:
                 print(f"\nComparing values for pattern {pattern_type}:")
-                print(f"Cached values: {cached_values}")
+                print(f"Stored values: {stored_values}")
                 print(f"Target values: {target_values}")
 
             # 전특1+기본 패턴의 경우
             if pattern_type == "전특1+기본":
-                if '+' not in cached_values or '+' not in target_values:
+                if '+' not in stored_values or '+' not in target_values:
                     return False
 
-                cached_v1, cached_v2 = map(float, cached_values.split('+'))
+                stored_v1, stored_v2 = map(float, stored_values.split('+'))
                 target_v1, target_v2 = map(float, target_values.split('+'))
 
                 # 첫 번째 값은 전투특성(10), 두 번째 값은 기본스탯(1600)
-                combat_similar = abs(cached_v1 - target_v1) <= 10
-                base_similar = abs(cached_v2 - target_v2) <= 1600
+                combat_similar = abs(stored_v1 - target_v1) <= 10
+                base_similar = abs(stored_v2 - target_v2) <= 1600
 
                 if self.debug:
-                    print(f"Combat stat comparison: {cached_v1} vs {target_v1} (diff: {abs(cached_v1 - target_v1)})")
-                    print(f"Base stat comparison: {cached_v2} vs {target_v2} (diff: {abs(cached_v2 - target_v2)})")
+                    print(f"Combat stat comparison: {stored_v1} vs {target_v1} (diff: {abs(stored_v1 - target_v1)})")
+                    print(f"Base stat comparison: {stored_v2} vs {target_v2} (diff: {abs(stored_v2 - target_v2)})")
                     print(f"Results - Combat: {combat_similar}, Base: {base_similar}")
 
                 return combat_similar and base_similar
 
             # 그 외 패턴들 (전투특성만 있는 경우)
-            elif '+' in cached_values and '+' in target_values:
-                cached_v1, cached_v2 = map(float, cached_values.split('+'))
+            elif '+' in stored_values and '+' in target_values:
+                stored_v1, stored_v2 = map(float, stored_values.split('+'))
                 target_v1, target_v2 = map(float, target_values.split('+'))
-                return (abs(cached_v1 - target_v1) <= 10 and 
-                    abs(cached_v2 - target_v2) <= 10)
+                return (abs(stored_v1 - target_v1) <= 10 and 
+                    abs(stored_v2 - target_v2) <= 10)
             else:
-                cached_v = float(cached_values)
+                stored_v = float(stored_values)
                 target_v = float(target_values)
-                return abs(cached_v - target_v) <= 10
+                return abs(stored_v - target_v) <= 10
 
         except Exception as e:
             if self.debug:

@@ -7,24 +7,24 @@ import threading
 from datetime import datetime
 from src.database.base_database import BaseDatabaseManager
 
-CacheBase = declarative_base()
+PatternBase = declarative_base()
 
-class MarketPriceCache(CacheBase):
-    __tablename__ = 'market_price_cache'
+class MarketPricePattern(PatternBase):
+    __tablename__ = 'market_price_pattern'
     
     id = Column(Integer, primary_key=True)
-    cache_id = Column(String, nullable=False, unique=True)
+    pattern_id = Column(String, nullable=False, unique=True)
     search_cycle_id = Column(String, nullable=False)  # timestamp를 search_cycle_id로 변경
     is_active = Column(Boolean, nullable=False, default=False)
     
-    accessory_patterns = relationship("AccessoryPricePattern", back_populates="cache")
-    bracelet_patterns = relationship("BraceletPricePattern", back_populates="cache")
+    accessory_patterns = relationship("AccessoryPricePattern", back_populates="pattern")
+    bracelet_patterns = relationship("BraceletPricePattern", back_populates="pattern")
 
-class AccessoryPricePattern(CacheBase):
+class AccessoryPricePattern(PatternBase):
     __tablename__ = 'accessory_price_patterns'
     
     id = Column(Integer, primary_key=True)
-    cache_id = Column(String, ForeignKey('market_price_cache.cache_id'), nullable=False)
+    pattern_id = Column(String, ForeignKey('market_price_pattern.pattern_id'), nullable=False)
     grade = Column(String, nullable=False)
     part = Column(String, nullable=False)
     level = Column(Integer, nullable=False)
@@ -35,17 +35,17 @@ class AccessoryPricePattern(CacheBase):
     total_sample_count = Column(Integer, nullable=False)
     common_option_values = Column(SQLiteJSON)
     
-    cache = relationship("MarketPriceCache", back_populates="accessory_patterns")
+    pattern = relationship("MarketPricePattern", back_populates="accessory_patterns")
 
     __table_args__ = (
-        Index('idx_acc_pattern_search', 'cache_id', 'grade', 'part', 'level', 'pattern_key', 'role'),
+        Index('idx_acc_pattern_search', 'pattern_id', 'grade', 'part', 'level', 'pattern_key', 'role'),
     )
 
-class BraceletPricePattern(CacheBase):
+class BraceletPricePattern(PatternBase):
     __tablename__ = 'bracelet_price_patterns'
     
     id = Column(Integer, primary_key=True)
-    cache_id = Column(String, ForeignKey('market_price_cache.cache_id'), nullable=False)
+    pattern_id = Column(String, ForeignKey('market_price_pattern.pattern_id'), nullable=False)
     grade = Column(String, nullable=False)
     pattern_type = Column(String, nullable=False)
     combat_stats = Column(String)
@@ -54,16 +54,16 @@ class BraceletPricePattern(CacheBase):
     price = Column(Integer, nullable=False)
     total_sample_count = Column(Integer, nullable=False)  # Added field
     
-    cache = relationship("MarketPriceCache", back_populates="bracelet_patterns")
+    pattern = relationship("MarketPricePattern", back_populates="bracelet_patterns")
 
     __table_args__ = (
-        Index('idx_bracelet_pattern_search', 'cache_id', 'grade', 'pattern_type'),
+        Index('idx_bracelet_pattern_search', 'pattern_id', 'grade', 'pattern_type'),
     )
 
 class PatternDatabaseManager(BaseDatabaseManager):
     def get_database_url(self) -> str:
-        return 'sqlite:///lostark_cache.db'
+        return 'sqlite:///lostark_pattern.db'
     
     def get_base_metadata(self):
-        return CacheBase.metadata
+        return PatternBase.metadata
 

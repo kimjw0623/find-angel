@@ -1,5 +1,6 @@
+from datetime import datetime
 import re
-from typing import List, Dict
+from typing import List, Dict, Optional, Any
 """
 Second 45 공퍼(0.4, 0.95, 1.55), 53 깡공(80, 195, 390), 44 낙인력(2.15, 4.8, 8), 46 무공퍼(0.8, 1.8, 3)
 Second 54 깡무공(195, 480, 960), 57 상태이상공격지속시간(0.2, 0.5, 1), 43 아덴게이지(1.6, 3.6, 6)
@@ -388,3 +389,72 @@ def calc_dmg_increment_percent(item):
         # print(dmg)
     dmg_increment_percent = 100.0 * (dmg - 1)
     return dmg_increment_percent
+
+# 카테고리 코드 매핑
+CATEGORY_CODES = {
+    "목걸이": 200010,
+    "귀걸이": 200020,
+    "반지": 200030,
+    "팔찌": 200040
+}
+
+# 검색 옵션 매핑
+SEARCH_OPTION_CODES = {
+    "팔찌 옵션 수량": 4,
+    "고정 효과 수량": 1,
+    "부여 효과 수량": 2
+}
+
+def get_current_timestamp() -> str:
+    """현재 시간을 YYYYMMDD_HHMM 형식으로 반환"""
+    return datetime.now().strftime("%Y%m%d_%H%M")
+
+def create_basic_search_request(grade: str, part: str, enhancement_level: Optional[int] = None, 
+                               quality: Optional[int] = None, page_no: int = 1) -> Dict[str, Any]:
+    """
+    기본 경매장 검색 요청 데이터 생성
+    
+    Args:
+        grade: 등급 (고대, 유물)
+        part: 부위 (목걸이, 귀걸이, 반지, 팔찌)
+        enhancement_level: 연마 단계
+        quality: 품질
+        page_no: 페이지 번호
+    """
+    category_code = CATEGORY_CODES[part]
+    
+    return {
+        "ItemLevelMin": 0,
+        "ItemLevelMax": 1800,
+        "ItemGradeQuality": quality,
+        "ItemUpgradeLevel": enhancement_level,
+        "ItemTradeAllowCount": None,
+        "SkillOptions": [{
+            "FirstOption": None,
+            "SecondOption": None,
+            "MinValue": None,
+            "MaxValue": None
+        }],
+        "EtcOptions": [],
+        "Sort": "BIDSTART_PRICE",
+        "CategoryCode": category_code,
+        "CharacterClass": "",
+        "ItemTier": 4,
+        "ItemGrade": grade,
+        "ItemName": "",
+        "PageNo": page_no,
+        "SortCondition": "ASC"
+    }
+
+def add_search_option(first_option: str, second_option: str, min_value: int, max_value: Optional[int] = None) -> Dict[str, Any]:
+    """검색 옵션 생성 (문자열을 숫자 코드로 매핑)"""
+    if max_value is None:
+        max_value = min_value
+        
+    return {
+        "FirstOption": SEARCH_OPTION_CODES[first_option],
+        "SecondOption": SEARCH_OPTION_CODES[second_option],
+        "MinValue": min_value,
+        "MaxValue": max_value
+    }
+

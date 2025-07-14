@@ -1,8 +1,8 @@
 {
   "ItemLevelMin": 0,
-  "ItemLevelMax": 0,
+  "ItemLevelMax": 1800,
   "ItemGradeQuality": null,
-  "ItemUpgradeLevel": null,
+  "ItemUpgradeLevel": 2,
   "ItemTradeAllowCount": null,
   "SkillOptions": [
     {
@@ -21,7 +21,7 @@
     }
   ],
   "Sort": "BIDSTART_PRICE",
-  "CategoryCode": 200000,
+  "CategoryCode": 200010,
   "CharacterClass": "",
   "ItemTier": 4,
   "ItemGrade": "고대",

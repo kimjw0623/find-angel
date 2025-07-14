@@ -39,7 +39,7 @@ def get_search_cycle_id_range(range_str: str) -> str:
 
 class DataService:
     def __init__(self):
-        self.cache_db = PatternDatabaseManager()
+        self.pattern_db = PatternDatabaseManager()
 
     def get_price_trends(self, 
                         role: Optional[str] = None, 
@@ -47,20 +47,20 @@ class DataService:
                         part: Optional[str] = None,
                         time_range: str = "1d") -> Dict:
         """가격 추이 데이터 조회"""
-        with self.cache_db.get_read_session() as session:
+        with self.pattern_db.get_read_session() as session:
             # search_cycle_id 범위 설정
             start_search_cycle_id = get_search_cycle_id_range(time_range)
             
             # 기본 쿼리 구성
-            cache_entries = session.query(MarketPriceCache)\
-                .filter(MarketPriceCache.search_cycle_id >= start_search_cycle_id)\
-                .order_by(MarketPriceCache.search_cycle_id.asc())\
+            pattern_entries = session.query(MarketPricePattern)\
+                .filter(MarketPricePattern.search_cycle_id >= start_search_cycle_id)\
+                .order_by(MarketPricePattern.search_cycle_id.asc())\
                 .all()
 
             trends = {}
-            for cache in cache_entries:
+            for pattern_entry in pattern_entries:
                 # search_cycle_id를 datetime으로 변환 후 타임스탬프로
-                timestamp = int(parse_search_cycle_id(cache.search_cycle_id).timestamp() * 1000)
+                timestamp = int(parse_search_cycle_id(pattern_entry.search_cycle_id).timestamp() * 1000)
                 
                 # 필터 조건 구성
                 filters = {}
@@ -73,7 +73,7 @@ class DataService:
 
                 # 패턴 조회
                 patterns = session.query(AccessoryPricePattern)\
-                    .filter_by(cache_id=cache.cache_id, **filters)\
+                    .filter_by(pattern_id=pattern_entry.pattern_id, **filters)\
                     .all()
 
                 for pattern in patterns:
@@ -134,21 +134,21 @@ class DataService:
 
     def get_all_patterns(self) -> Dict:
         """모든 패턴 데이터 조회"""
-        with self.cache_db.get_read_session() as session:
+        with self.pattern_db.get_read_session() as session:
             # 가장 최근의 활성 캐시 조회
-            active_cache = session.query(MarketPriceCache)\
+            active_pattern = session.query(MarketPricePattern)\
                 .filter_by(is_active=True)\
                 .first()
             
-            if not active_cache:
-                raise HTTPException(status_code=404, detail="No active cache found")
+            if not active_pattern:
+                raise HTTPException(status_code=404, detail="No active pattern found")
 
             dealer_patterns = {}
             support_patterns = {}
 
             # 패턴 조회 및 정렬 (샘플 수 기준)
             patterns = session.query(AccessoryPricePattern)\
-                .filter_by(cache_id=active_cache.cache_id)\
+                .filter_by(pattern_id=active_pattern_entry.pattern_id)\
                 .all()
 
             for pattern in patterns:
@@ -180,15 +180,15 @@ class DataService:
 
     def get_bracelet_patterns(self, grade: Optional[str] = None) -> Dict:
         """팔찌 패턴 데이터 조회"""
-        with self.cache_db.get_read_session() as session:
-            active_cache = session.query(MarketPriceCache)\
+        with self.pattern_db.get_read_session() as session:
+            active_pattern = session.query(MarketPricePattern)\
                 .filter_by(is_active=True)\
                 .first()
             
-            if not active_cache:
+            if not active_pattern:
                 return {}
 
-            filters = {'cache_id': active_cache.cache_id}
+            filters = {'pattern_id': active_pattern_entry.pattern_id}
             if grade:
                 filters['grade'] = grade
 
@@ -250,23 +250,23 @@ async def bracelet_trends(
 ):
     """팔찌 가격 추이 데이터 API"""
     try:
-        with data_service.cache_db.get_read_session() as session:
+        with data_service.pattern_db.get_read_session() as session:
             # search_cycle_id 범위 설정
             start_search_cycle_id = get_search_cycle_id_range(time_range)
             
             # 기본 쿼리 구성
-            cache_entries = session.query(MarketPriceCache)\
-                .filter(MarketPriceCache.search_cycle_id >= start_search_cycle_id)\
-                .order_by(MarketPriceCache.search_cycle_id.asc())\
+            pattern_entries = session.query(MarketPricePattern)\
+                .filter(MarketPricePattern.search_cycle_id >= start_search_cycle_id)\
+                .order_by(MarketPricePattern.search_cycle_id.asc())\
                 .all()
 
             trends = {}
-            for cache in cache_entries:
-                timestamp = int(parse_search_cycle_id(cache.search_cycle_id).timestamp() * 1000)
+            for pattern_entry in pattern_entries:
+                timestamp = int(parse_search_cycle_id(pattern_entry.search_cycle_id).timestamp() * 1000)
 
                 # 패턴별 가격 데이터 조회
                 patterns = session.query(BraceletPricePattern)\
-                    .filter_by(cache_id=cache.cache_id)
+                    .filter_by(pattern_id=pattern_entry.pattern_id)
                 
                 if grade:
                     patterns = patterns.filter_by(grade=grade)
@@ -295,18 +295,18 @@ async def bracelet_patterns(
 ):
     """팔찌 패턴과 현재 가격 데이터 API"""
     try:
-        with data_service.cache_db.get_read_session() as session:
+        with data_service.pattern_db.get_read_session() as session:
             # 가장 최근의 활성 캐시 조회
-            active_cache = session.query(MarketPriceCache)\
+            active_pattern = session.query(MarketPricePattern)\
                 .filter_by(is_active=True)\
                 .first()
             
-            if not active_cache:
-                raise HTTPException(status_code=404, detail="No active cache found")
+            if not active_pattern:
+                raise HTTPException(status_code=404, detail="No active pattern found")
 
             # 패턴 조회 쿼리 구성
             patterns_query = session.query(BraceletPricePattern)\
-                .filter_by(cache_id=active_cache.cache_id)
+                .filter_by(pattern_id=active_pattern_entry.pattern_id)
             
             if grade:
                 patterns_query = patterns_query.filter_by(grade=grade)

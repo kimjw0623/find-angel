@@ -11,4 +11,4 @@ fi
 # PYTHONPATH 설정
 export PYTHONPATH="${PYTHONPATH}:$(pwd)"
 
-python -m src.core.async_price_collector
+python -m src.core.async_price_collector "$@"

@@ -33,7 +33,7 @@ class ItemEvaluator:
                     print(f"New cache update detected: {cache_update_time}")
                     
                     # 캐시 리로드
-                    self.price_analyzer._load_cache()
+                    self.price_analyzer._load_patterns()
                     self.last_check_time = cache_update_time
                     
                     print("Cache reloaded successfully")

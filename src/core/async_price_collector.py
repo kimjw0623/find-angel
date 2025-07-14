@@ -1,9 +1,8 @@
-from typing import Dict, List, Optional, Tuple, Any
+from typing import List
 from datetime import datetime, timedelta
 import asyncio
 from src.api.async_api_client import TokenBatchRequester
 from src.core.price_pattern_analyzer import PricePatternAnalyzer
-from itertools import combinations, product
 from src.database.raw_database import *
 from src.common.utils import *
 from src.common.config import config
@@ -192,9 +191,9 @@ class AsyncPriceCollector:
         # 5. 일괄 저장
         if all_processed_items:
             print(f"Saving {grade} {part} {enhancement_level}연마 {len(all_processed_items)} items...")
-            unique_count = await self.save_acc_items(all_processed_items, self.current_cycle_id)
-            total_collected = len(all_processed_items) - unique_count
-            print(f"Saved {total_collected} unique items after removing {unique_count} duplicates")
+            duplicate_count = await self.save_acc_items(all_processed_items, self.current_cycle_id)
+            total_collected = len(all_processed_items) - duplicate_count
+            print(f"Saved {total_collected} unique items after removing {duplicate_count} duplicates")
 
         return total_collected
 
@@ -244,9 +243,9 @@ class AsyncPriceCollector:
         # 5. 일괄 저장
         if all_processed_items:
             print(f"Saving {grade} 팔찌 {fixed_slots}고정 {extra_slots}부여 {len(all_processed_items)} items...")
-            unique_count = await self.save_bracelet_items(all_processed_items, self.current_cycle_id)
-            total_collected = len(all_processed_items) - unique_count
-            print(f"Saved {total_collected} unique items after removing {unique_count} duplicates")
+            duplicate_count = await self.save_bracelet_items(all_processed_items, self.current_cycle_id)
+            total_collected = len(all_processed_items) - duplicate_count
+            print(f"Saved {total_collected} unique items after removing {duplicate_count} duplicates")
 
         return total_collected
 
@@ -282,11 +281,11 @@ class AsyncPriceCollector:
             return None
 
         processed_items = []
-        current_time = datetime.now()
+        search_timestamp = response.get('search_timestamp', datetime.now())  # API 응답에서 timestamp 추출
 
         for item in valid_items:
             processed_item = {
-                'timestamp': current_time,
+                'search_timestamp': search_timestamp,
                 'name': item["Name"],
                 'grade': grade,
                 'part': part,
@@ -338,12 +337,12 @@ class AsyncPriceCollector:
             return None
 
         processed_items = []
-        current_time = datetime.now()
+        search_timestamp = response.get('search_timestamp', datetime.now())  # API 응답에서 timestamp 추출
 
         for item in valid_items:
             # 기본 정보 처리
             processed_item = {
-                'timestamp': current_time,
+                'search_timestamp': search_timestamp,
                 'grade': grade,
                 'name': item["Name"],
                 'trade_count': item["AuctionInfo"]["TradeAllowCount"],
@@ -412,20 +411,15 @@ class AsyncPriceCollector:
         for item in items:
             item_key = _create_acc_hash_key(item)
             # 같은 키의 아이템 중 가장 최근 것만 유지
-            if item_key not in unique_items or item['timestamp'] > unique_items[item_key]['timestamp']:
+            if item_key not in unique_items or item['search_timestamp'] > unique_items[item_key]['search_timestamp']:
                 unique_items[item_key] = item
         
         # 2. DB에 일괄 저장
         with self.db.get_write_session() as session:
-            # 현재 사이클의 기존 아이템 확인
-            existing_count = session.query(PriceRecord).filter(
-                PriceRecord.search_cycle_id == search_cycle_id
-            ).count()
-            
-            # 새 아이템들만 저장
+            saved_count = 0
             for item_data in unique_items.values():
                 record = PriceRecord(
-                    timestamp=item_data['timestamp'],
+                    timestamp=item_data['search_timestamp'],
                     search_cycle_id=search_cycle_id,
                     grade=item_data['grade'],
                     name=item_data['name'],
@@ -456,11 +450,12 @@ class AsyncPriceCollector:
                     record.raw_options.append(raw_option)
                 
                 session.add(record)
+                saved_count += 1
             
             session.flush()
             
             # 중복 제거된 수 반환
-            return len(items) - len(unique_items)
+            return len(items) - saved_count
 
     def _sync_save_bracelet_items(self, items: List[dict], search_cycle_id: str) -> int:
         """개선된 팔찌 아이템 저장"""
@@ -469,20 +464,15 @@ class AsyncPriceCollector:
         for item in items:
             item_key = _create_bracelet_hash_key(item)
             # 같은 키의 아이템 중 가장 최근 것만 유지
-            if item_key not in unique_items or item['timestamp'] > unique_items[item_key]['timestamp']:
+            if item_key not in unique_items or item['search_timestamp'] > unique_items[item_key]['search_timestamp']:
                 unique_items[item_key] = item
         
         # 2. DB에 일괄 저장
         with self.db.get_write_session() as session:
-            # 현재 사이클의 기존 아이템 확인
-            existing_count = session.query(BraceletPriceRecord).filter(
-                BraceletPriceRecord.search_cycle_id == search_cycle_id
-            ).count()
-            
-            # 새 아이템들만 저장
+            saved_count = 0
             for item_data in unique_items.values():
                 record = BraceletPriceRecord(
-                    timestamp=item_data['timestamp'],
+                    timestamp=item_data['search_timestamp'],
                     search_cycle_id=search_cycle_id,
                     grade=item_data['grade'],
                     name=item_data['name'],
@@ -518,11 +508,12 @@ class AsyncPriceCollector:
                     record.special_effects.append(special_effect)
                 
                 session.add(record)
+                saved_count += 1
             
             session.flush()
             
             # 중복 제거된 수 반환
-            return len(items) - len(unique_items)
+            return len(items) - saved_count
 
 async def main():
     import argparse

@@ -1,6 +1,6 @@
 import re
 from src.database.raw_database import *
-from src.core.market_price_cache import MarketPriceCache
+from src.core.price_pattern_analyzer import PricePatternAnalyzer
 from src.core.item_evaluator import ItemEvaluator
 
 def parse_market_item(line: str) -> dict:
@@ -106,8 +106,8 @@ def parse_market_item(line: str) -> dict:
 def main():
     # 데이터베이스 매니저와 평가기 초기화
     db_manager = RawDatabaseManager()
-    price_cache = MarketPriceCache(db_manager, debug=True)
-    evaluator = ItemEvaluator(price_cache, debug=True)
+    price_analyzer = PricePatternAnalyzer(db_manager, debug=True)
+    evaluator = ItemEvaluator(price_analyzer, debug=True)
     
     print("매물 정보를 입력하세요. 종료하려면 'q' 또는 'exit'를 입력하세요.")
     print("입력 형식 예시:")

@@ -1,5 +1,5 @@
 from src.core.enhancement_simulator import *
-from src.core.market_price_cache import DBMarketPriceCache
+from src.core.price_pattern_analyzer import PricePatternAnalyzer
 from src.core.item_evaluator import ItemEvaluator
 from src.database.raw_database import *
 from collections import defaultdict
@@ -79,8 +79,8 @@ class EnhancementStrategyAnalyzer:
 class EnhancementAnalyzer:
     def __init__(self, db_manager: RawDatabaseManager, debug: bool = False):
         self.debug = debug
-        self.price_cache = DBMarketPriceCache(db_manager, debug=debug)
-        self.evaluator = ItemEvaluator(self.price_cache, debug=debug)
+        self.price_analyzer = PricePatternAnalyzer(db_manager, debug=debug)
+        self.evaluator = ItemEvaluator(self.price_analyzer, debug=debug)
 
     def _get_option_value(self, option_name: str, option_grade: OptionGrade) -> float:
         """옵션 등급에 따른 수치 반환"""

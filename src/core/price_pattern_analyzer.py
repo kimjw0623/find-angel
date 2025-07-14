@@ -45,12 +45,12 @@ def convert_json_keys_to_int(obj):
         return [convert_json_keys_to_int(item) for item in obj]
     return obj
 
-class DBMarketPriceCache:
+class PricePatternAnalyzer:
     def __init__(self, main_db_manager: RawDatabaseManager, debug: bool = False):
         self.main_db = main_db_manager  # 기존 DB (데이터 읽기용)
-        self.cache_db = PatternDatabaseManager()  # 캐시 전용 DB
+        self.memory_cache_db = PatternDatabaseManager()  # 캐시 전용 DB
         self.debug = debug
-        self.cache = {}  # 메모리 캐시
+        self.memory_cache = {}  # 메모리 캐시
         self._load_cache()
 
         self.EXCLUSIVE_OPTIONS = {
@@ -81,14 +81,14 @@ class DBMarketPriceCache:
 
     def _load_cache(self):
         """현재 활성화된 캐시 데이터 로드"""
-        with self.cache_db.get_read_session() as session:
+        with self.memory_cache_db.get_read_session() as session:
             # 활성화된 캐시 찾기
             active_cache = session.query(MarketPriceCache).filter_by(is_active=True).first()
             
             if not active_cache:
                 if self.debug:
                     print("No active cache found, initializing empty cache")
-                self.cache = {
+                self.memory_cache = {
                     "dealer": {},
                     "support": {},
                     "bracelet_고대": {},
@@ -107,7 +107,7 @@ class DBMarketPriceCache:
             ).all()
 
             # 캐시 데이터 구성
-            self.cache = {
+            self.memory_cache = {
                 "dealer": {},
                 "support": {},
                 "bracelet_고대": {},
@@ -129,9 +129,9 @@ class DBMarketPriceCache:
                 }
                 
                 if pattern.role == 'dealer':
-                    self.cache['dealer'][cache_key] = pattern_data
+                    self.memory_cache['dealer'][cache_key] = pattern_data
                 else:
-                    self.cache['support'][cache_key] = pattern_data
+                    self.memory_cache['support'][cache_key] = pattern_data
 
             # 팔찌 패턴 처리
             for pattern in bracelet_patterns:
@@ -142,21 +142,21 @@ class DBMarketPriceCache:
                 )
                 bracelet_cache_first_key = f'bracelet_{pattern.grade}'
                 try:
-                    self.cache[bracelet_cache_first_key][pattern.pattern_type][pattern_key] = pattern.price, pattern.total_sample_count
+                    self.memory_cache[bracelet_cache_first_key][pattern.pattern_type][pattern_key] = pattern.price, pattern.total_sample_count
                 except KeyError:
-                    self.cache[bracelet_cache_first_key][pattern.pattern_type] = {}
-                    self.cache[bracelet_cache_first_key][pattern.pattern_type][pattern_key] = pattern.price, pattern.total_sample_count
+                    self.memory_cache[bracelet_cache_first_key][pattern.pattern_type] = {}
+                    self.memory_cache[bracelet_cache_first_key][pattern.pattern_type][pattern_key] = pattern.price, pattern.total_sample_count
 
             if self.debug:
                 print(f"Cache loaded. Last update: {active_cache.search_cycle_id}")
-                print(f"Dealer cache entries: {len(self.cache['dealer'])}")
-                print(f"Support cache entries: {len(self.cache['support'])}")
-                print(f"고대 팔찌 cache entries: {len(self.cache['bracelet_고대'])}")
-                print(f"유물 팔찌 cache entries: {len(self.cache['bracelet_유물'])}")
+                print(f"Dealer cache entries: {len(self.memory_cache['dealer'])}")
+                print(f"Support cache entries: {len(self.memory_cache['support'])}")
+                print(f"고대 팔찌 cache entries: {len(self.memory_cache['bracelet_고대'])}")
+                print(f"유물 팔찌 cache entries: {len(self.memory_cache['bracelet_유물'])}")
 
     def get_last_update_time(self) -> Optional[datetime]:
         """캐시의 마지막 업데이트 시간 확인"""
-        with self.cache_db.get_read_session() as session:
+        with self.memory_cache_db.get_read_session() as session:
             active_cache = session.query(MarketPriceCache).filter_by(is_active=True).first()
             return active_cache.search_cycle_id if active_cache else None
 
@@ -170,15 +170,15 @@ class DBMarketPriceCache:
             "support": None
         }
 
-        if dealer_key and dealer_key in self.cache["dealer"]:
-            cache_data["dealer"] = self.cache["dealer"][dealer_key]
+        if dealer_key and dealer_key in self.memory_cache["dealer"]:
+            cache_data["dealer"] = self.memory_cache["dealer"][dealer_key]
             if self.debug:
                 print(f"\nDealer cache hit for {dealer_key}")
                 print(f"Base price: {cache_data['dealer']['base_price']:,}")
                 print(f"Sample count: {cache_data['dealer']['sample_count']}")
 
-        if support_key and support_key in self.cache["support"]:
-            cache_data["support"] = self.cache["support"][support_key]
+        if support_key and support_key in self.memory_cache["support"]:
+            cache_data["support"] = self.memory_cache["support"][support_key]
             if self.debug:
                 print(f"\nSupport cache hit for {support_key}")
                 print(f"Base price: {cache_data['support']['base_price']:,}")
@@ -200,13 +200,13 @@ class DBMarketPriceCache:
         cache_key = f"bracelet_{grade}"
 
         # 1. 기본적인 캐시 존재 여부 확인
-        if cache_key not in self.cache:
+        if cache_key not in self.memory_cache:
             if self.debug:
                 print(f"No cache data found for {cache_key}")
             return None
 
         # 2. 해당 패턴 타입의 가격 데이터 가져오기
-        pattern_prices = self.cache[cache_key].get(pattern_type, {})
+        pattern_prices = self.memory_cache[cache_key].get(pattern_type, {})
 
         # 3. 정확한 매칭 시도
         if key in pattern_prices:
@@ -352,7 +352,7 @@ class DBMarketPriceCache:
                 new_cache_id = str(uuid.uuid4())
                 start_time = datetime.now()
 
-                with self.cache_db.get_write_session() as write_session:
+                with self.memory_cache_db.get_write_session() as write_session:
                     # 가장 최근 search_cycle인지 확인
                     latest_cycle = write_session.query(MarketPriceCache.search_cycle_id)\
                         .order_by(MarketPriceCache.search_cycle_id.desc())\

@@ -2,7 +2,7 @@ from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime, timedelta
 import asyncio
 from src.api.async_api_client import TokenBatchRequester
-from src.core.market_price_cache import DBMarketPriceCache
+from src.core.price_pattern_analyzer import PricePatternAnalyzer
 from itertools import combinations, product
 from src.database.raw_database import *
 from src.common.utils import *
@@ -61,7 +61,7 @@ def _create_bracelet_hash_key(item_data: dict) -> tuple:
 class AsyncPriceCollector:
     def __init__(self, db_manager: RawDatabaseManager, tokens: List[str]):
         self.db = db_manager
-        self.cache = DBMarketPriceCache(self.db)
+        self.analyzer = PricePatternAnalyzer(self.db)
         self.requester = TokenBatchRequester(tokens)
         self.current_cycle_id = None
         self.ITEMS_PER_PAGE = config.items_per_page
@@ -122,7 +122,7 @@ class AsyncPriceCollector:
             
             if total_collected > 0:
                 # 캐시 업데이트
-                self.cache.update_cache(self.current_cycle_id)
+                self.analyzer.update_cache(self.current_cycle_id)
                 print(f"Cache updated at {datetime.now()}")
                 
         except Exception as e:

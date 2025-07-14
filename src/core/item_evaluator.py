@@ -7,10 +7,10 @@ from src.common.utils import *
 from sqlalchemy.orm import aliased
 
 class ItemEvaluator:
-    def __init__(self, price_cache, debug=False):
+    def __init__(self, price_analyzer, debug=False):
         self.debug = debug
-        self.price_cache = price_cache
-        self.last_check_time = self.price_cache.get_last_update_time()
+        self.price_analyzer = price_analyzer
+        self.last_check_time = self.price_analyzer.get_last_update_time()
         
         # 캐시 업데이트 체크 스레드 시작
         self._stop_flag = threading.Event()
@@ -25,7 +25,7 @@ class ItemEvaluator:
         """주기적으로 캐시 파일 업데이트 확인"""
         while not self._stop_flag.is_set():
             try:
-                cache_update_time = self.price_cache.get_last_update_time()
+                cache_update_time = self.price_analyzer.get_last_update_time()
                 
                 # 캐시 파일이 더 최신이면 리로드
                 if (cache_update_time and 
@@ -33,7 +33,7 @@ class ItemEvaluator:
                     print(f"New cache update detected: {cache_update_time}")
                     
                     # 캐시 리로드
-                    self.price_cache._load_cache()
+                    self.price_analyzer._load_cache()
                     self.last_check_time = cache_update_time
                     
                     print("Cache reloaded successfully")
@@ -209,7 +209,7 @@ class ItemEvaluator:
             current_price = item["AuctionInfo"]["BuyPrice"]
 
             # 캐시된 가격 데이터 조회
-            price_data = self.price_cache.get_price_data(grade, part, level, reference_options)
+            price_data = self.price_analyzer.get_price_data(grade, part, level, reference_options)
 
             # 딜러용/서포터용 가격 추정 - 상세 내역 포함
             dealer_details = self._estimate_dealer_price(reference_options, int(item['GradeQuality']), price_data["dealer"])
@@ -356,7 +356,7 @@ class ItemEvaluator:
             'special_effects': special_effects
         }
         
-        bracelet_result = self.price_cache.get_bracelet_price(grade, item_data)
+        bracelet_result = self.price_analyzer.get_bracelet_price(grade, item_data)
         expected_price = None
         if bracelet_result:
             expected_price, total_sample_count = bracelet_result

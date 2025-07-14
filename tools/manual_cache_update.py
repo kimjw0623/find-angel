@@ -2,12 +2,12 @@ from src.database.raw_database import RawDatabaseManager, PriceRecord
 from src.database.pattern_database import PatternDatabaseManager, MarketPriceCache
 from datetime import datetime, timedelta
 import time
-from src.core.market_price_cache import DBMarketPriceCache
+from src.core.price_pattern_analyzer import PricePatternAnalyzer
 
 def main():
     db_manager = RawDatabaseManager()
     cache_db = PatternDatabaseManager()
-    cache = DBMarketPriceCache(db_manager, debug=False)
+    analyzer = PricePatternAnalyzer(db_manager, debug=False)
 
     # search_cycle_id로만 조회하고 정렬
     with db_manager.get_read_session() as session:
@@ -35,7 +35,7 @@ def main():
                     continue
             
             print(f"Creating cache for search cycle {cycle_id}")
-            cache.update_cache(cycle_id)
+            analyzer.update_cache(cycle_id)
             time.sleep(1)  # DB 부하 방지를 위한 짧은 대기
 
 if __name__ == "__main__":

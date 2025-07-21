@@ -1,8 +1,21 @@
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional, Any, Union
 import numpy as np
-from src.database.raw_database import *
-from src.database.pattern_database import *
+from src.database.raw_database import (
+    RawDatabaseManager, AuctionAccessory, AuctionBracelet, 
+    AuctionStatus, ItemOption, RawItemOption, 
+    BraceletCombatStat, BraceletBaseStat, BraceletSpecialEffect
+)
+from src.database.pattern_database import (
+    PatternDatabaseManager, AuctionPricePattern, 
+    AccessoryPricePattern, BraceletPricePattern
+)
+from src.common.types import (
+    MemoryPatterns, PatternKey, AccessoryPatternData, BraceletPatternData,
+    OptionList, OptionTuple, QualityPrices, CommonOptionValues,
+    BraceletPatternType, BraceletPatternKey, BraceletPriceInfo,
+    BraceletPatternDetails, BraceletItemData, Role
+)
 import pickle
 import time
 import os
@@ -50,8 +63,7 @@ class PricePatternAnalyzer:
         self.main_db = main_db_manager  # 기존 DB (데이터 읽기용)
         self.pattern_db = PatternDatabaseManager()  # 패턴 데이터베이스
         self.debug = debug
-        self.memory_patterns = {}  # 메모리 패턴 저장소
-        self._load_patterns()
+        # 패턴 생성 전용 - 메모리 캐시 제거
 
         self.EXCLUSIVE_OPTIONS = {
             "목걸이": {
@@ -79,11 +91,11 @@ class PricePatternAnalyzer:
             "아군보호막": [0.95, 2.1, 3.5]
         }
 
-    def _load_patterns(self):
+    def _load_patterns(self) -> None:
         """현재 활성화된 패턴 데이터 로드"""
         with self.pattern_db.get_read_session() as session:
             # 활성화된 캐시 찾기
-            active_pattern = session.query(MarketPricePattern).filter_by(is_active=True).first()
+            active_pattern = session.query(AuctionPricePattern).filter_by(is_active=True).first()
             
             if not active_pattern:
                 if self.debug:
@@ -117,21 +129,35 @@ class PricePatternAnalyzer:
             # 악세서리 패턴 처리
             for pattern in accessory_patterns:
                 pattern_key = f"{pattern.grade}:{pattern.part}:{pattern.level}:{pattern.pattern_key}"
-                # JSON 로드 시 숫자 키를 float, int로 각각 변환
-                converted_common_option_values = convert_json_keys_to_float(json.loads(pattern.common_option_values))
-                converted_base_prices = convert_json_keys_to_int(json.loads(pattern.quality_prices))
+                # SQLiteJSON이 자동으로 dict로 변환해줌 (테스트)
+                # 만약 문자열로 나오면 json.loads() 필요, dict로 나오면 불필요
+                raw_common_values = pattern.common_option_values  # type: ignore
+                raw_quality_prices = pattern.quality_prices  # type: ignore
+                
+                print(f"DEBUG: common_option_values type: {type(raw_common_values)}")
+                print(f"DEBUG: quality_prices type: {type(raw_quality_prices)}")
+                
+                if isinstance(raw_common_values, str):
+                    converted_common_option_values = convert_json_keys_to_float(json.loads(raw_common_values))
+                else:
+                    converted_common_option_values = convert_json_keys_to_float(raw_common_values)
+                    
+                if isinstance(raw_quality_prices, str):
+                    converted_base_prices = convert_json_keys_to_int(json.loads(raw_quality_prices))
+                else:
+                    converted_base_prices = convert_json_keys_to_int(raw_quality_prices)
                 
                 pattern_data = {
                     'quality_prices': converted_base_prices,
                     'common_option_values': converted_common_option_values,
                     'total_sample_count': pattern.total_sample_count,
-                    'last_update': active_pattern.search_cycle_id
+                    'last_update': active_pattern.pattern_id
                 }
                 
-                if pattern.role == 'dealer':
-                    self.memory_patterns['dealer'][pattern_key] = pattern_data
+                if pattern.role == 'dealer':  # type: ignore
+                    self.memory_patterns['dealer'][pattern_key] = pattern_data # type: ignore
                 else:
-                    self.memory_patterns['support'][pattern_key] = pattern_data
+                    self.memory_patterns['support'][pattern_key] = pattern_data # type: ignore
 
             # 팔찌 패턴 처리
             for pattern in bracelet_patterns:
@@ -142,13 +168,13 @@ class PricePatternAnalyzer:
                 )
                 bracelet_pattern_first_key = f'bracelet_{pattern.grade}'
                 try:
-                    self.memory_patterns[bracelet_pattern_first_key][pattern.pattern_type][pattern_key] = pattern.price, pattern.total_sample_count
+                    self.memory_patterns[bracelet_pattern_first_key][pattern.pattern_type][pattern_key] = pattern.price, pattern.total_sample_count  # type: ignore
                 except KeyError:
-                    self.memory_patterns[bracelet_pattern_first_key][pattern.pattern_type] = {}
-                    self.memory_patterns[bracelet_pattern_first_key][pattern.pattern_type][pattern_key] = pattern.price, pattern.total_sample_count
+                    self.memory_patterns[bracelet_pattern_first_key][pattern.pattern_type] = {}  # type: ignore
+                    self.memory_patterns[bracelet_pattern_first_key][pattern.pattern_type][pattern_key] = pattern.price, pattern.total_sample_count  # type: ignore
 
             if self.debug:
-                print(f"Patterns loaded. Last update: {active_pattern.search_cycle_id}")
+                print(f"Patterns loaded. Last update: {active_pattern.pattern_id}")
                 print(f"Dealer pattern entries: {len(self.memory_patterns['dealer'])}")
                 print(f"Support pattern entries: {len(self.memory_patterns['support'])}")
                 print(f"고대 팔찌 pattern entries: {len(self.memory_patterns['bracelet_고대'])}")
@@ -157,15 +183,15 @@ class PricePatternAnalyzer:
     def get_last_update_time(self) -> Optional[datetime]:
         """캐시의 마지막 업데이트 시간 확인"""
         with self.pattern_db.get_read_session() as session:
-            active_pattern = session.query(MarketPricePattern).filter_by(is_active=True).first()
-            return active_pattern.search_cycle_id if active_pattern else None
+            active_pattern = session.query(AuctionPricePattern).filter_by(is_active=True).first()
+            return active_pattern.pattern_id if active_pattern else None  # type: ignore
 
     def get_price_data(self, grade: str, part: str, level: int, 
-                      options: Dict[str, List[Tuple[str, float]]]) -> Dict[str, Optional[Dict]]:
+                      options: Dict[str, OptionList]) -> Dict[str, Optional[AccessoryPatternData]]:
         """가격 데이터 조회"""            
         dealer_key, support_key = self.get_pattern_key(grade, part, level, options)
         
-        pattern_data = {
+        pattern_data: Dict[str, Optional[AccessoryPatternData]] = {
             "dealer": None,
             "support": None
         }
@@ -174,19 +200,19 @@ class PricePatternAnalyzer:
             pattern_data["dealer"] = self.memory_patterns["dealer"][dealer_key]
             if self.debug:
                 print(f"\nDealer pattern hit for {dealer_key}")
-                print(f"Base price: {pattern_data['dealer']['base_price']:,}")
-                print(f"Sample count: {pattern_data['dealer']['sample_count']}")
+                print(f"Quality prices: {pattern_data['dealer']['quality_prices']}")
+                print(f"Sample count: {pattern_data['dealer']['total_sample_count']}")
 
         if support_key and support_key in self.memory_patterns["support"]:
             pattern_data["support"] = self.memory_patterns["support"][support_key]
             if self.debug:
                 print(f"\nSupport pattern hit for {support_key}")
-                print(f"Base price: {pattern_data['support']['base_price']:,}")
-                print(f"Sample count: {pattern_data['support']['sample_count']}")
+                print(f"Quality prices: {pattern_data['support']['quality_prices']}")
+                print(f"Sample count: {pattern_data['support']['total_sample_count']}")
 
         return pattern_data
 
-    def get_bracelet_price(self, grade: str, item_data: Dict) -> Optional[int]:
+    def get_bracelet_price(self, grade: str, item_data: BraceletItemData) -> Optional[Union[int, BraceletPriceInfo]]:
         """팔찌 가격 조회"""
         pattern_info = self._classify_bracelet_pattern(item_data)
         # print(f"찾아진 패턴 for item {item_data}: {pattern_info}")
@@ -194,7 +220,7 @@ class PricePatternAnalyzer:
             return None
 
         pattern_type, details = pattern_info
-        key = (details['pattern'], details['values'], details['extra_slots'])
+        key = (details['pattern'], details['values'], details['extra_slots']) # type: ignore
 
         # 캐시에서 해당 패턴의 가격 조회
         pattern_key = f"bracelet_{grade}"
@@ -220,9 +246,9 @@ class PricePatternAnalyzer:
         # (기존 비슷한 패턴 찾기 로직 유지)
         for stored_key, (price, total_sample_count) in pattern_prices.items():
             stored_pattern, stored_values, stored_extra = stored_key
-            if (stored_pattern == details['pattern'] and 
-                stored_extra == details['extra_slots']):
-                if self._is_similar_values(stored_values, details['values'], pattern_type):
+            if (stored_pattern == details['pattern'] and  # type: ignore
+                stored_extra == details['extra_slots']): # type: ignore
+                if self._is_similar_values(stored_values, details['values'], pattern_type): # type: ignore
                     if self.debug:
                         print(f"\nSimilar pattern match found:")
                         print(f"Original pattern: {pattern_type} {key}")
@@ -235,20 +261,21 @@ class PricePatternAnalyzer:
 
         return None
 
-    def update_pattern(self, search_cycle_id: str) -> bool:
+    def update_pattern(self, pattern_id: datetime, send_signal: bool = True) -> bool:
         """
         특정 search_cycle의 시장 가격 데이터로 캐시 업데이트
         
         Args:
-            search_cycle_id: 캐시를 생성할 search_cycle의 ID
+            pattern_id: 캐시를 생성할 search_cycle의 ID
+            send_signal: IPC 신호 발송 여부 (기본값: True)
             
         Returns:
             bool: 캐시 업데이트 성공 여부
         """
         try:
             # 로그 파일 설정
-            print(f"\nUpdating price patterns for search cycle {search_cycle_id}")
-            log_filename = f'pattern_log/pattern_calculation_{search_cycle_id}.log'
+            print(f"Search cycle: {pattern_id.isoformat()}")
+            log_filename = f'pattern_log/pattern_calculation_{pattern_id.isoformat().replace(":", "-")}.log'
             
             # pattern_log 디렉토리 생성
             os.makedirs('pattern_log', exist_ok=True)
@@ -262,25 +289,29 @@ class PricePatternAnalyzer:
                 }
 
                 with self.main_db.get_read_session() as session:
-                    # 해당 search_cycle의 timestamp 조회
-                    cycle_info = session.query(PriceRecord.timestamp)\
-                        .filter(PriceRecord.search_cycle_id == search_cycle_id)\
+                    # pattern_id가 이미 datetime 객체
+                    search_timestamp = pattern_id
+                    
+                    # 해당 시간에 처음 발견된 데이터가 있는지 확인
+                    cycle_info = session.query(AuctionAccessory)\
+                        .filter(AuctionAccessory.first_seen_at == search_timestamp)\
                         .first()
                     
                     if not cycle_info:
-                        print(f"No data found for search cycle {search_cycle_id}")
+                        print(f"No data found for search cycle {pattern_id.isoformat()}")
                         return False
                         
-                    print(f"Processing data from search cycle at {search_cycle_id}")
+                    print(f"Processing data from search cycle at {pattern_id.isoformat()}")
                     
                     # 해당 search_cycle의 데이터 조회
                     start_time = datetime.now()
-                    records = session.query(PriceRecord)\
-                        .filter(PriceRecord.search_cycle_id == search_cycle_id)\
+                    records = session.query(AuctionAccessory)\
+                        .filter(AuctionAccessory.first_seen_at == search_timestamp)\
                         .all()
-                    print(f"DB query duration: {datetime.now() - start_time}")
-                    start_time = datetime.now()
+                    query_duration = (datetime.now() - start_time).total_seconds()
+                    print(f"DB query duration: {query_duration:.1f}s")
                     print(f"Found {len(records)} acc records in search cycle")
+                    start_time = datetime.now()
 
                     # 딜러용/서포터용 데이터 그룹화
                     dealer_groups = {}
@@ -328,7 +359,8 @@ class PricePatternAnalyzer:
                         if support_key not in support_groups:
                             support_groups[support_key] = []
                         support_groups[support_key].append(record)
-                    print(f"Classifying acc patterns duration: {datetime.now() - start_time}")
+                    classify_duration = (datetime.now() - start_time).total_seconds()
+                    print(f"Classifying acc patterns duration: {classify_duration:.1f}s")
                     start_time = datetime.now()
 
                     # 각 그룹별로 가격 계산
@@ -344,12 +376,13 @@ class PricePatternAnalyzer:
                             if price_data:
                                 new_patterns["support"][key] = price_data
 
-                    print(f"Calculating acc group prices duration: {datetime.now() - start_time}")
+                    calc_duration = (datetime.now() - start_time).total_seconds()
+                    print(f"Calculating acc group prices duration: {calc_duration:.1f}s")
 
                     # 팔찌 가격 업데이트
                     for grade in ["고대", "유물"]:
                         pattern_key = f"bracelet_{grade}"
-                        new_patterns[pattern_key] = self._calculate_bracelet_prices(grade, search_cycle_id)
+                        new_patterns[pattern_key] = self._calculate_bracelet_prices(grade, pattern_id)
                         
                 # 새로운 패턴 ID 생성
                 new_pattern_id = str(uuid.uuid4())
@@ -357,27 +390,27 @@ class PricePatternAnalyzer:
 
                 with self.pattern_db.get_write_session() as write_session:
                     # 가장 최근 search_cycle인지 확인
-                    latest_cycle = write_session.query(MarketPricePattern.search_cycle_id)\
-                        .order_by(MarketPricePattern.search_cycle_id.desc())\
-                        .first()
+                    latest_cycle = write_session.query(AuctionPricePattern.pattern_id)\
+                        .order_by(AuctionPricePattern.pattern_id.desc())\
+                        .first()  # type: ignore
                     
                     # 테이블이 비어있거나, 현재 cycle이 더 최신인 경우 True
-                    is_latest = not latest_cycle or latest_cycle.search_cycle_id <= search_cycle_id
+                    is_latest = not latest_cycle or latest_cycle.pattern_id <= pattern_id.isoformat()  # type: ignore
                     
-                    print(f"Latest cycle id: {latest_cycle.search_cycle_id if latest_cycle else 'None'}")
-                    print(f"Current pattern id: {search_cycle_id}")
+                    print(f"Latest cycle id: {latest_cycle.pattern_id if latest_cycle else 'None'}")
+                    print(f"Current pattern id: {pattern_id.isoformat()}")
                     print(f"Is latest: {is_latest}")
 
                     # 새 패턴 메타데이터 생성
-                    new_pattern_entry = MarketPricePattern(
+                    new_pattern_entry = AuctionPricePattern(
                         pattern_id=new_pattern_id,
-                        search_cycle_id=search_cycle_id,  # timestamp 대신 search_cycle_id 사용
+                        pattern_id=pattern_id.isoformat(),  # datetime을 string으로 변환
                         is_active=is_latest
                     )
 
                     if is_latest:
                         # 기존 활성 패턴 비활성화
-                        write_session.query(MarketPricePattern).filter_by(is_active=True).update(
+                        write_session.query(AuctionPricePattern).filter_by(is_active=True).update(
                             {"is_active": False}
                         )
                     write_session.add(new_pattern_entry)
@@ -420,9 +453,15 @@ class PricePatternAnalyzer:
                                 )
                                 write_session.add(bracelet_pattern)
 
-                    print(f"Writing patterns duration: {datetime.now() - start_time}")
+                    write_duration = (datetime.now() - start_time).total_seconds()
+                    print(f"Writing patterns duration: {write_duration:.1f}s")
 
-                print(f"Pattern collection created with ID {new_pattern_id} for search cycle {search_cycle_id}")
+                print(f"Pattern collection created with ID {new_pattern_id} for search cycle {pattern_id.isoformat()}")
+                
+                # 패턴 업데이트 완료 신호 발송 (옵션)
+                if send_signal:
+                    self._send_pattern_update_signal(pattern_id)
+                
                 return True
 
         except Exception as e:
@@ -431,7 +470,7 @@ class PricePatternAnalyzer:
             traceback.print_exc()
             return False
 
-    def get_pattern_key(self, grade: str, part: str, level: int, options: Dict[str, List[Tuple[str, float]]]) -> Tuple[str, str]:
+    def get_pattern_key(self, grade: str, part: str, level: int, options: Dict[str, OptionList]) -> Tuple[PatternKey, PatternKey]:
         """캐시 키 생성 - exclusive 옵션만 사용"""
         dealer_exclusive = sorted([
             (opt[0], opt[1]) for opt in options["dealer_exclusive"]
@@ -446,7 +485,7 @@ class PricePatternAnalyzer:
         
         return dealer_key, support_key
 
-    def _calculate_common_option_values(self, items: List[PriceRecord], role: str, quality_prices: Dict[str, int]) -> Dict: 
+    def _calculate_common_option_values(self, items: List[AuctionAccessory], role: Role, quality_prices: QualityPrices) -> CommonOptionValues: 
         """각 Common 옵션 값의 추가 가치를 계산"""
         MIN_SAMPLE = 2
         if len(items) < MIN_SAMPLE:
@@ -494,7 +533,7 @@ class PricePatternAnalyzer:
 
         return values
 
-    def _calculate_group_prices(self, items: List[PriceRecord], exclusive_key: str, role: str) -> Optional[Dict]:
+    def _calculate_group_prices(self, items: List[AuctionAccessory], exclusive_key: str, role: Role) -> Optional[AccessoryPatternData]:
         """그룹의 가격 통계 계산"""
         if not items:
             return None
@@ -522,13 +561,15 @@ class PricePatternAnalyzer:
         # Calculate common option values using items with quality >= 60
         common_option_values = self._calculate_common_option_values(items, role, quality_prices)
 
-        return {
+        result: AccessoryPatternData = {
             'quality_prices': quality_prices,
             'common_option_values': common_option_values,
-            'total_sample_count': len(items)
+            'total_sample_count': len(items),
+            'last_update': ''  # 이 값은 나중에 설정됨
         }
+        return result
 
-    def _calculate_bracelet_prices(self, grade: str, search_cycle_id: str) -> Dict:
+    def _calculate_bracelet_prices(self, grade: str, pattern_id: datetime) -> BraceletPatternData:
         """팔찌 패턴별 가격 계산"""
         try:
             print(f"\n=== Calculating Bracelet Prices for {grade} Grade ===")
@@ -536,18 +577,15 @@ class PricePatternAnalyzer:
             with self.main_db.get_read_session() as session:
 
                 start_time = datetime.now()
-                records = session.query(BraceletPriceRecord)\
-                    .filter(BraceletPriceRecord.search_cycle_id == search_cycle_id,
-                            BraceletPriceRecord.grade == grade)\
+                search_timestamp = pattern_id
+                records = session.query(AuctionBracelet)\
+                    .filter(AuctionBracelet.first_seen_at == search_timestamp,
+                            AuctionBracelet.grade == grade)\
                     .all()
-                print(f"Bracelet DB query duration: {datetime.now() - start_time}")
-                start_time = datetime.now()
-
+                bracelet_query_duration = (datetime.now() - start_time).total_seconds()
+                print(f"Bracelet DB query duration: {bracelet_query_duration:.1f}s")
                 print(f"Found {len(records)} records in search cycle")
-
-                # # 중복 제거는 더 이상 필요 없음
-                # records = self._get_unique_items(records)
-                # print(f"Records after deduplication: {len(records)}")
+                start_time = datetime.now()
 
                 pattern_prices = {
                     "전특2": {},
@@ -590,7 +628,8 @@ class PricePatternAnalyzer:
 
                         pattern_prices[pattern_type][key].append(record.price)
 
-                print(f"Classifying bracelet patterns duration: {datetime.now() - start_time}")
+                bracelet_classify_duration = (datetime.now() - start_time).total_seconds()
+                print(f"Classifying bracelet patterns duration: {bracelet_classify_duration:.1f}s")
                 start_time = datetime.now()
 
                 # 최종 가격 계산
@@ -611,8 +650,8 @@ class PricePatternAnalyzer:
 
                             result[pattern_type][key] = selected_price, len(prices)
 
-                print(f"Calculting bracelet group prices duration: {datetime.now() - start_time}")
-                start_time = datetime.now()
+                bracelet_calc_duration = (datetime.now() - start_time).total_seconds()
+                print(f"Calculting bracelet group prices duration: {bracelet_calc_duration:.1f}s")
                 return result
 
         except Exception as e:
@@ -622,7 +661,7 @@ class PricePatternAnalyzer:
                 traceback.print_exc()
             return {}
 
-    def _classify_bracelet_pattern(self, item_data: Dict, return_list: bool = False) -> Union[Optional[Tuple[str, Dict]], Optional[List[Tuple[str, Dict]]]]:
+    def _classify_bracelet_pattern(self, item_data: BraceletItemData, return_list: bool = False) -> Union[Optional[Tuple[BraceletPatternType, BraceletPatternDetails]], Optional[List[Tuple[BraceletPatternType, BraceletPatternDetails]]]]:
         """
         팔찌 패턴 분류 및 키 생성
         return_list가 True면 해당 값 이하의 모든 구간을 포함한 패턴들의 리스트를 반환
@@ -665,8 +704,8 @@ class PricePatternAnalyzer:
                     values2 = self._round_combat_stat(grade, value2, return_list=True)
                     
                     # 모든 가능한 조합 생성
-                    for v1 in values1:
-                        for v2 in values2:
+                    for v1 in values1:  # type: ignore
+                        for v2 in values2:  # type: ignore
                             stats = sorted([(stat1, v1), (stat2, v2)], key=lambda x: x[0])
                             result.append((
                                 "전특2",
@@ -698,8 +737,8 @@ class PricePatternAnalyzer:
                     combat_values = self._round_combat_stat(grade, combat[1], return_list=True)
                     base_values = self._round_base_stat(grade, base[1], return_list=True)
                     
-                    for cv in combat_values:
-                        for bv in base_values:
+                    for cv in combat_values:  # type: ignore  # type: ignore
+                        for bv in base_values:  # type: ignore  # type: ignore
                             result.append((
                                 "전특1+기본",
                                 {
@@ -730,7 +769,7 @@ class PricePatternAnalyzer:
                 
                 if return_list:
                     combat_values = self._round_combat_stat(grade, combat[1], return_list=True)
-                    for cv in combat_values:
+                    for cv in combat_values:  # type: ignore
                         result.append((
                             pattern_type,
                             {
@@ -757,7 +796,7 @@ class PricePatternAnalyzer:
                 
                 if return_list:
                     base_values = self._round_base_stat(grade, base[1], return_list=True)
-                    for bv in base_values:
+                    for bv in base_values:  # type: ignore
                         result.append((
                             "기본+공이속",
                             {
@@ -893,39 +932,14 @@ class PricePatternAnalyzer:
                 print(f"Error comparing values: {e}")
             return False
 
-    def _get_unique_items(self, items):
-        """완전히 동일한 매물은 가장 최근 것만 남김"""
-        unique_items = {}
-        for item in items:
-            # 매물의 고유 특성을 키로 사용
-            if "팔찌" in item.name:
-                combat_stats = [(stat.stat_type, stat.value) for stat in item.combat_stats]
-                base_stats = [(stat.stat_type, stat.value)
-                              for stat in item.base_stats]
-                special_effects = [(effect.effect_type, effect.value)
-                                   for effect in item.special_effects]
-                option_tuple = tuple(
-                    sorted(combat_stats+base_stats+special_effects))
+    def _send_pattern_update_signal(self, pattern_id: datetime):
+        """패턴 업데이트 완료 신호를 item_evaluator에 발송"""
+        try:
+            from src.common.ipc_utils import notify_pattern_update
+            result = notify_pattern_update(pattern_id)
+            if result:
+                print(f"📡 Pattern update signal sent via IPC: {pattern_id.isoformat()}")
             else:
-                option_tuple = tuple(sorted(
-                    (opt.option_name, opt.option_value, opt.is_percentage)
-                    for opt in item.raw_options 
-                    if opt.option_name not in ["깨달음", "도약"]
-                ))
-
-            key = (
-                item.grade,
-                item.name, 
-                item.part if hasattr(item, 'part') else None,  # 팔찌는 part 속성이 없음
-                item.level if hasattr(item, 'level') else None,  # 팔찌는 level 속성이 없음
-                item.quality if hasattr(item, 'quality') else None,  # 팔찌는 quality 속성이 없음
-                item.price,
-                item.trade_count,
-                option_tuple
-            )
-
-            # 이미 있는 매물이면 타임스탬프 비교해서 최신 것만 유지
-            if key not in unique_items or item.timestamp > unique_items[key].timestamp:
-                unique_items[key] = item
-
-        return list(unique_items.values())
+                print(f"📡 Pattern update signal sent (no active listeners): {pattern_id.isoformat()}")
+        except Exception as e:
+            print(f"Warning: Failed to send pattern update signal: {e}")

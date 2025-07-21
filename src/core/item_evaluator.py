@@ -1,18 +1,24 @@
 import time
 import threading
 import numpy as np
+import os
+from datetime import datetime
 from typing import List, Dict, Optional, Tuple, Any
 from src.database.raw_database import *
 from src.common.utils import *
+from src.core.pattern_reader import PatternReader
 from sqlalchemy.orm import aliased
 
 class ItemEvaluator:
-    def __init__(self, price_analyzer, debug=False):
+    def __init__(self, debug=False):
         self.debug = debug
-        self.price_analyzer = price_analyzer
-        self.last_check_time = self.price_analyzer.get_last_update_time()
+        self.pattern_reader = PatternReader(debug=debug)
+        self.last_check_time = self.pattern_reader.get_last_update_time()
         
-        # 캐시 업데이트 체크 스레드 시작
+        # IPC 서버 설정
+        self._setup_ipc_server()
+        
+        # 캐시 업데이트 체크 스레드 시작 (백업용)
         self._stop_flag = threading.Event()
         self._update_check_thread = threading.Thread(
             target=self._check_cache_updates,
@@ -20,30 +26,82 @@ class ItemEvaluator:
         )
         self._update_check_thread.daemon = True
         self._update_check_thread.start()
+    
+    def _setup_ipc_server(self):
+        """IPC 서버 설정 및 메시지 핸들러 등록"""
+        try:
+            from src.common.ipc_utils import IPCServer, MessageTypes
+            
+            self.ipc_server = IPCServer()
+            
+            # 패턴 업데이트 메시지 핸들러 등록
+            self.ipc_server.register_handler(
+                MessageTypes.PATTERN_UPDATED,
+                self._handle_pattern_update_message
+            )
+            
+            # 헬스체크 핸들러 등록
+            self.ipc_server.register_handler(
+                MessageTypes.HEALTH_CHECK,
+                self._handle_health_check
+            )
+            
+            # 서버 시작
+            self.ipc_server.start_server()
+            
+        except Exception as e:
+            print(f"Warning: Failed to setup IPC server: {e}")
+            self.ipc_server = None
+    
+    def _handle_pattern_update_message(self, message):
+        """패턴 업데이트 메시지 처리"""
+        try:
+            search_cycle_id_str = message['data']['search_cycle_id']
+            search_cycle_id = datetime.fromisoformat(search_cycle_id_str)
+            
+            print(f"🔔 Pattern update notification received via IPC: {search_cycle_id}")
+            
+            # 패턴 업데이트 시간 갱신
+            self.last_check_time = search_cycle_id
+            
+            print("✅ Patterns reloaded via IPC notification")
+            
+            return {'status': 'reloaded', 'timestamp': datetime.now().isoformat()}
+            
+        except Exception as e:
+            print(f"Error processing pattern update message: {e}")
+            return {'status': 'error', 'message': str(e)}
+    
+    def _handle_health_check(self, message):
+        """헬스체크 메시지 처리"""
+        return {
+            'status': 'healthy',
+            'last_check_time': self.last_check_time.isoformat() if self.last_check_time else None,
+            'timestamp': datetime.now().isoformat()
+        }
 
     def _check_cache_updates(self):
-        """주기적으로 캐시 파일 업데이트 확인"""
+        """주기적으로 캐시 파일 업데이트 확인 (백업용)"""
         while not self._stop_flag.is_set():
             try:
-                cache_update_time = self.price_analyzer.get_last_update_time()
+                cache_update_time = self.pattern_reader.get_last_update_time()
                 
-                # 캐시 파일이 더 최신이면 리로드
+                # 캐시 파일이 더 최신이면 리로드 (IPC 알림을 놓친 경우 대비)
                 if (cache_update_time and 
                     (not self.last_check_time or cache_update_time > self.last_check_time)):
-                    print(f"New cache update detected: {cache_update_time}")
+                    print(f"📅 Fallback: New cache update detected: {cache_update_time}")
                     
-                    # 캐시 리로드
-                    self.price_analyzer._load_patterns()
+                    # 패턴 업데이트 확인
                     self.last_check_time = cache_update_time
                     
-                    print("Cache reloaded successfully")
+                    print("✅ Patterns reloaded via fallback check")
             
             except Exception as e:
                 if self.debug:
-                    print(f"Error checking cache updates: {e}")
+                    print(f"Error in fallback cache check: {e}")
             
-            # 1분마다 체크
-            time.sleep(60)
+            # 5분마다 체크 (IPC가 있으므로 긴 주기로)
+            time.sleep(300)
             
     def _get_reference_options(self, item: Dict, part: str) -> Dict[str, Any]:
         """
@@ -209,7 +267,7 @@ class ItemEvaluator:
             current_price = item["AuctionInfo"]["BuyPrice"]
 
             # 캐시된 가격 데이터 조회
-            price_data = self.price_analyzer.get_price_data(grade, part, level, reference_options)
+            price_data = self.pattern_reader.get_price_data(grade, part, level, reference_options)
 
             # 딜러용/서포터용 가격 추정 - 상세 내역 포함
             dealer_details = self._estimate_dealer_price(reference_options, int(item['GradeQuality']), price_data["dealer"])
@@ -356,7 +414,7 @@ class ItemEvaluator:
             'special_effects': special_effects
         }
         
-        bracelet_result = self.price_analyzer.get_bracelet_price(grade, item_data)
+        bracelet_result = self.pattern_reader.get_bracelet_price(grade, item_data)
         expected_price = None
         if bracelet_result:
             expected_price, total_sample_count = bracelet_result

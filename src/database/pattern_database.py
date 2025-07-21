@@ -9,8 +9,8 @@ from src.database.base_database import BaseDatabaseManager
 
 PatternBase = declarative_base()
 
-class MarketPricePattern(PatternBase):
-    __tablename__ = 'market_price_pattern'
+class AuctionPricePattern(PatternBase):
+    __tablename__ = 'auction_price_pattern'
     
     id = Column(Integer, primary_key=True)
     pattern_id = Column(String, nullable=False, unique=True)
@@ -24,7 +24,7 @@ class AccessoryPricePattern(PatternBase):
     __tablename__ = 'accessory_price_patterns'
     
     id = Column(Integer, primary_key=True)
-    pattern_id = Column(String, ForeignKey('market_price_pattern.pattern_id'), nullable=False)
+    pattern_id = Column(String, ForeignKey('auction_price_pattern.pattern_id'), nullable=False)
     grade = Column(String, nullable=False)
     part = Column(String, nullable=False)
     level = Column(Integer, nullable=False)
@@ -35,7 +35,7 @@ class AccessoryPricePattern(PatternBase):
     total_sample_count = Column(Integer, nullable=False)
     common_option_values = Column(SQLiteJSON)
     
-    pattern = relationship("MarketPricePattern", back_populates="accessory_patterns")
+    pattern = relationship("AuctionPricePattern", back_populates="accessory_patterns")
 
     __table_args__ = (
         Index('idx_acc_pattern_search', 'pattern_id', 'grade', 'part', 'level', 'pattern_key', 'role'),
@@ -45,7 +45,7 @@ class BraceletPricePattern(PatternBase):
     __tablename__ = 'bracelet_price_patterns'
     
     id = Column(Integer, primary_key=True)
-    pattern_id = Column(String, ForeignKey('market_price_pattern.pattern_id'), nullable=False)
+    pattern_id = Column(String, ForeignKey('auction_price_pattern.pattern_id'), nullable=False)
     grade = Column(String, nullable=False)
     pattern_type = Column(String, nullable=False)
     combat_stats = Column(String)
@@ -54,7 +54,7 @@ class BraceletPricePattern(PatternBase):
     price = Column(Integer, nullable=False)
     total_sample_count = Column(Integer, nullable=False)  # Added field
     
-    pattern = relationship("MarketPricePattern", back_populates="bracelet_patterns")
+    pattern = relationship("AuctionPricePattern", back_populates="bracelet_patterns")
 
     __table_args__ = (
         Index('idx_bracelet_pattern_search', 'pattern_id', 'grade', 'pattern_type'),

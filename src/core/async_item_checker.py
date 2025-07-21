@@ -2,15 +2,13 @@ from typing import Dict, Optional, List
 import asyncio
 from datetime import datetime, timedelta
 from src.api.async_api_client import TokenBatchRequester
-from src.database.raw_database import RawDatabaseManager
-from src.core.price_pattern_analyzer import PricePatternAnalyzer
-from src.notifications.discord_manager import send_discord_message, init_discord_manager
+# 더 이상 필요 없는 imports 제거
+from src.notifications.notification_hub import send_item_notification
 import multiprocessing as mp
 from src.common.utils import *
 from src.common.config import config
 import os
 from src.core.item_evaluator import ItemEvaluator
-from dotenv import load_dotenv
 
 
 class AsyncMarketScanner:
@@ -111,7 +109,9 @@ class AsyncMarketScanner:
                             count += 1
                             evaluation = self.evaluator.evaluate_item(item)
                             if evaluation and evaluation["is_notable"]:
-                                send_discord_message(self.webhook, item, evaluation)
+                                # 새로운 알림 시스템 사용
+                                formatted_message = self._format_item_message(item, evaluation)
+                                send_item_notification(item, evaluation, formatted_message)
                                 self.msg_queue.put((item, evaluation))
 
                     # 다음 배치로 이동
@@ -143,13 +143,42 @@ class AsyncMarketScanner:
                 },
             ],
         }
+    
+    
+    def _format_item_message(self, item: Dict, evaluation: Dict) -> str:
+        """아이템 메시지 포맷팅 (간단한 텍스트 형태)"""
+        try:
+            options_str = ' '.join([f"{opt['OptionName']}{opt['Value']}" for opt in item["Options"] 
+                                if opt["OptionName"] not in ["깨달음", "도약"]])
+            
+            end_date = item["AuctionInfo"]["EndDate"]
+            
+            if evaluation["type"] == "accessory":
+                return (f"{evaluation['grade']} {item['Name']} | "
+                    f"{evaluation['current_price']:,}골드 vs {evaluation['expected_price']:,}골드 "
+                    f"({evaluation['price_ratio']*100:.1f}%) | "
+                    f"품질 {evaluation['quality']} | {evaluation['level']}연마 | "
+                    f"만료 {end_date} | "
+                    f"{options_str} | "
+                    f"거래 {item['AuctionInfo']['TradeAllowCount']}회")
+            else:  # 팔찌
+                return (f"{evaluation['grade']} {item['Name']} | "
+                    f"{evaluation['current_price']:,}골드 vs {evaluation['expected_price']:,}골드 "
+                    f"({evaluation['price_ratio']*100:.1f}%) | "
+                    f"고정 {evaluation['fixed_option_count']} 부여 {int(evaluation['extra_option_count'])} | "
+                    f"만료 {end_date} | "
+                    f"{options_str}")
+                    
+        except Exception as e:
+            print(f"Error formatting item message: {e}")
+            return f"매물 발견: {item.get('Name', 'Unknown')} - {evaluation.get('current_price', 0):,}골드"
 
 class AsyncMarketMonitor:
     def __init__(self, msg_queue: mp.Queue, tokens: List[str], debug: bool = False):
-        db_manager = RawDatabaseManager()
-        price_analyzer = PricePatternAnalyzer(db_manager, debug=debug)
-        self.evaluator = ItemEvaluator(price_analyzer, debug=debug)
-        self.scanner = AsyncMarketScanner(self.evaluator, tokens, msg_queue)
+        # 로컬 evaluator 초기화
+        evaluator = ItemEvaluator(debug=debug)
+        
+        self.scanner = AsyncMarketScanner(evaluator, tokens, msg_queue)
 
     async def run(self):
         """비동기 모니터링 실행"""
@@ -168,14 +197,18 @@ class AsyncMarketMonitor:
 
 async def main():
     try:
-        msg_queue = mp.Queue()
+        msg_queue = mp.Queue()  # 기존 호환성을 위해 유지
         monitor = AsyncMarketMonitor(msg_queue, tokens=config.monitor_tokens, debug=False)
-        terminator = init_discord_manager(msg_queue)
+        
+        print("🔔 새로운 알림 시스템을 사용합니다.")
+        print("🔗 알림 허브가 별도로 실행되어야 합니다: ./scripts/run_notification_hub.sh")
 
         await monitor.run()
 
-    finally:
-        terminator()
+    except KeyboardInterrupt:
+        print("\n✋ 모니터링을 중지합니다...")
+    except Exception as e:
+        print(f"❌ 오류 발생: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())

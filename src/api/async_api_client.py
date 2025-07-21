@@ -2,6 +2,7 @@ from typing import List, Dict, Any, Tuple
 import aiohttp
 import asyncio
 import time
+from datetime import datetime
 
 class TokenBatchRequester:
     def __init__(self, tokens: List[str]):
@@ -276,8 +277,9 @@ class TokenBatchRequester:
     async def _make_single_request(self, headers: Dict, request_data: Dict) -> Dict:
         """단일 요청 처리"""
         try:
+            search_timestamp = datetime.now()
             # timeout을 더 길게 설정
-            async with self.session.post(
+            async with self.session.post( # type: ignore
                 "https://developer-lostark.game.onstove.com/auctions/items",
                 headers=headers,
                 json=request_data,
@@ -286,6 +288,7 @@ class TokenBatchRequester:
                 if response.status == 200:
                     try:
                         data = await response.json()
+                        data['search_timestamp'] = search_timestamp
                         return {
                             'status': 200,
                             'data': data,

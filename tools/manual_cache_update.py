@@ -2,12 +2,12 @@ from src.database.raw_database import RawDatabaseManager, PriceRecord
 from src.database.pattern_database import PatternDatabaseManager, MarketPricePattern
 from datetime import datetime, timedelta
 import time
-from src.core.price_pattern_analyzer import PricePatternAnalyzer
+from src.core.pattern_generator import PatternGenerator
 
 def main():
     db_manager = RawDatabaseManager()
     pattern_db = PatternDatabaseManager()
-    analyzer = PricePatternAnalyzer(db_manager, debug=False)
+    generator = PatternGenerator(db_manager, debug=False)
 
     # search_cycle_id로만 조회하고 정렬
     with db_manager.get_read_session() as session:
@@ -35,7 +35,7 @@ def main():
                     continue
             
             print(f"Creating pattern for search cycle {cycle_id}")
-            analyzer.update_pattern(cycle_id)
+            generator.update_pattern(cycle_id, send_signal=False)  # 수동 실행은 신호 없이
             time.sleep(1)  # DB 부하 방지를 위한 짧은 대기
 
 if __name__ == "__main__":

@@ -3,34 +3,12 @@ venv/
 __pycache__
 miscellaneous
 sim_result
-고대 1연마 딜러 귀걸이.png
-고대 1연마 딜러 목걸이.png
-고대 1연마 딜러 반지.png
-고대 2연마 딜러 귀걸이.png
-고대 2연마 딜러 목걸이.png
-고대 2연마 딜러 반지.png
-고대 3연마 딜러 귀걸이.png
-고대 3연마 딜러 목걸이.png
-고대 3연마 딜러 반지.png
-유물 1연마 딜러 귀걸이.png
-유물 1연마 딜러 목걸이.png
-유물 1연마 딜러 반지.png
-유물 2연마 딜러 귀걸이.png
-유물 2연마 딜러 목걸이.png
-유물 2연마 딜러 반지.png
-유물 3연마 딜러 귀걸이.png
-유물 3연마 딜러 목걸이.png
-유물 3연마 딜러 반지.png
-lostark_prices.db
-lostark_prices.db-shm
-lostark_prices.db-wal
-lostark_cache.db
-lostark_cache.db-shm
-lostark_cache.db-wal
-market_price_cache.pkl
-price_calculation.log
-__pycache__/utils.cpython-39.pyc
-price_log
-market_price_cache_0.pkl
-market_price_cache_1.pkl
-market_price_cache_active.txt
+lostark_auction.db
+lostark_auction.db-shm
+lostark_auction.db-wal
+lostark_pattern.db
+lostark_pattern.db-shm
+lostark_pattern.db-wal
+pattern_log
+json
+.claude

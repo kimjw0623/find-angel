@@ -1,0 +1,22 @@
+[Unit]
+Description=Lost Ark Price Collector Service
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=ahrrri
+WorkingDirectory=/home/ahrrri/find-angel
+Environment=PATH=/home/ahrrri/find-angel/venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/ahrrri/find-angel/venv/bin/python -m src.core.async_price_collector
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# 리소스 제한 (필요시)
+MemoryMax=1G
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target

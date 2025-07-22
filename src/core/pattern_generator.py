@@ -53,15 +53,10 @@ class PatternGenerator:
         self.main_db = main_db_manager  # 기존 DB (데이터 읽기용)
         self.pattern_db = PatternDatabaseManager()  # 패턴 데이터베이스
         self.debug = debug
-
-        # 레거시 설정들 (config로 이동됨)
-        self.MIN_SAMPLES = config.pattern_generator_settings["min_regression_samples"]
-        self.SOLD_ITEMS_WINDOW = timedelta(days=7)  # SOLD 상태 아이템 조회 기간  
-        self.SOLD_PRICE_WEIGHT = 0.95  # SOLD 상태 아이템 가격 가중치
-        
+        self.is_generating = False  # 패턴 생성 중 플래그
+       
         # Config에서 설정 가져오기
         self.EXCLUSIVE_OPTIONS = config.exclusive_options
-        self.COMMON_OPTIONS = config.common_options
 
     def update_pattern(self, pattern_datetime: Optional[datetime] = None, send_signal: bool = True) -> bool:
         """
@@ -74,6 +69,12 @@ class PatternGenerator:
         Returns:
             bool: 캐시 업데이트 성공 여부
         """
+        # 중복 실행 방지
+        if self.is_generating:
+            print(f"Pattern generation already in progress, skipping...")
+            return False
+            
+        self.is_generating = True
         try:
             # pattern_datetime이 None인 경우 현재 시각 사용
             if pattern_datetime is None:
@@ -160,11 +161,18 @@ class PatternGenerator:
                                 level=int(level),
                                 pattern_key=pattern_key,
                                 role=role,
-                                # Multilinear regression 데이터
-                                intercept=pattern_data['intercept'],
-                                coefficients=pattern_data['coefficients'],
-                                feature_names=pattern_data['feature_names'],
-                                total_sample_count=pattern_data['total_sample_count']
+                                # 공통 필드
+                                model_type=pattern_data['model_type'],
+                                base_price=pattern_data['base_price'],
+                                total_sample_count=pattern_data['total_sample_count'],
+                                r_squared=pattern_data.get('r_squared'),
+                                success_rate=pattern_data.get('success_rate'),
+                                sold_count=pattern_data.get('sold_count'),
+                                expired_count=pattern_data.get('expired_count'),
+                                # Multilinear regression 데이터 (필요시에만)
+                                intercept=pattern_data.get('intercept'),
+                                coefficients=pattern_data.get('coefficients'),
+                                feature_names=pattern_data.get('feature_names')
                             )
                             write_session.add(acc_pattern)
 
@@ -182,7 +190,10 @@ class PatternGenerator:
                             sorted_stats=sorted_stats,
                             extra_slots=extra_slots,
                             price=pattern_data['price'],
-                            total_sample_count=pattern_data['total_sample_count']
+                            total_sample_count=pattern_data['total_sample_count'],
+                            success_rate=pattern_data.get('success_rate'),
+                            sold_count=pattern_data.get('sold_count'),
+                            expired_count=pattern_data.get('expired_count')
                         )
                         write_session.add(bracelet_pattern)
 
@@ -190,7 +201,7 @@ class PatternGenerator:
                 print(f"Writing patterns duration: {write_duration:.1f}s")
 
             completion_time = datetime.now()
-            total_duration = (completion_time - start_time).total_seconds()
+            total_duration = (completion_time - pattern_datetime).total_seconds()
             print(f"Pattern generation completed at {completion_time.isoformat()}")
             print(f"Total pattern generation duration: {total_duration:.1f}s")
             print(f"Pattern collection created for datetime: {pattern_datetime.isoformat()}")
@@ -206,10 +217,13 @@ class PatternGenerator:
             import traceback
             traceback.print_exc()
             return False
+        finally:
+            self.is_generating = False
 
     def _calculate_accessory_prices(self, pattern_datetime: datetime) -> tuple[Dict, Dict]:
         """악세서리 패턴별 가격 계산"""
         with self.main_db.get_read_session() as read_session:
+            # 패턴 생성용: ACTIVE + 7일 이내 SOLD
             active_accessories = (
                 read_session.query(AuctionAccessory)
                 .filter(
@@ -224,10 +238,33 @@ class PatternGenerator:
                 )
                 .all()
             )
+            
+            # 판매 성공률 계산용: 최근 30일 이내 SOLD + EXPIRED
+            success_rate_window_days = config.pattern_generator_settings.get("success_rate_window_days", 30)
+            historical_accessories = (
+                read_session.query(AuctionAccessory)
+                .filter(
+                    (
+                        (AuctionAccessory.status == AuctionStatus.SOLD)
+                        & (
+                            AuctionAccessory.sold_at
+                            >= pattern_datetime - timedelta(days=success_rate_window_days)
+                        )
+                    )
+                    | (
+                        (AuctionAccessory.status == AuctionStatus.EXPIRED)
+                        & (
+                            AuctionAccessory.last_seen_at
+                            >= pattern_datetime - timedelta(days=success_rate_window_days)
+                        )
+                    )
+                )
+                .all()
+            )
 
             print(f"Found {len(active_accessories)} accessory records for pattern generation")
 
-            # 딜러용/서포터용 데이터 그룹화
+            # 딜러용/서포터용 데이터 그룹화 (가격 계산용)
             dealer_groups = {}
             support_groups = {}
 
@@ -244,16 +281,35 @@ class PatternGenerator:
                     support_groups[support_key] = []
                 support_groups[support_key].append(accessory)
 
-            # 각 그룹별로 가격 계산
+            # 판매 성공률 계산용 그룹화
+            dealer_historical_groups = {}
+            support_historical_groups = {}
+
+            for accessory in historical_accessories:
+                dealer_key, support_key = self._classify_accessory_patterns(accessory)
+
+                # 딜러용 그룹 추가
+                if dealer_key not in dealer_historical_groups:
+                    dealer_historical_groups[dealer_key] = []
+                dealer_historical_groups[dealer_key].append(accessory)
+
+                # 서포터용 그룹 추가
+                if support_key not in support_historical_groups:
+                    support_historical_groups[support_key] = []
+                support_historical_groups[support_key].append(accessory)
+
+            # 각 그룹별로 가격 계산 (판매 성공률 포함)
             dealer_patterns = {}
             for key, items in dealer_groups.items():
-                price_data = self._calculate_accessory_group_prices(items, key, "dealer")
+                historical_items = dealer_historical_groups.get(key, [])
+                price_data = self._calculate_accessory_group_prices(items, key, "dealer", historical_items)
                 if price_data:
                     dealer_patterns[key] = price_data
 
             support_patterns = {}
             for key, items in support_groups.items():
-                price_data = self._calculate_accessory_group_prices(items, key, "support")
+                historical_items = support_historical_groups.get(key, [])
+                price_data = self._calculate_accessory_group_prices(items, key, "support", historical_items)
                 if price_data:
                     support_patterns[key] = price_data
 
@@ -262,6 +318,7 @@ class PatternGenerator:
     def _calculate_bracelet_prices(self, pattern_datetime: datetime) -> Dict:
         """팔찌 패턴별 가격 계산"""
         with self.main_db.get_read_session() as session:
+            # 패턴 생성용: ACTIVE + 7일 이내 SOLD
             bracelets = (
                 session.query(AuctionBracelet)
                 .filter(
@@ -276,24 +333,53 @@ class PatternGenerator:
                 )
                 .all()
             )
+            
+            # 판매 성공률 계산용: 최근 30일 이내 SOLD + EXPIRED
+            success_rate_window_days = config.pattern_generator_settings.get("success_rate_window_days", 30)
+            historical_bracelets = (
+                session.query(AuctionBracelet)
+                .filter(
+                    (
+                        (AuctionBracelet.status == AuctionStatus.SOLD)
+                        & (
+                            AuctionBracelet.sold_at
+                            >= pattern_datetime - timedelta(days=success_rate_window_days)
+                        )
+                    )
+                    | (
+                        (AuctionBracelet.status == AuctionStatus.EXPIRED)
+                        & (
+                            AuctionBracelet.last_seen_at
+                            >= pattern_datetime - timedelta(days=success_rate_window_days)
+                        )
+                    )
+                )
+                .all()
+            )
 
             print(f"Found {len(bracelets)} bracelet records for pattern generation")
 
-            # 팔찌 그룹화
+            # 팔찌 그룹화 (가격 계산용)
             bracelet_groups = {}
-
             for bracelet in bracelets:
                 cache_key = self._classify_bracelet_patterns(bracelet)
-
-                # 그룹 추가
                 if cache_key not in bracelet_groups:
                     bracelet_groups[cache_key] = []
                 bracelet_groups[cache_key].append(bracelet)
 
-            # 각 그룹별로 가격 계산
+            # 판매 성공률 계산용 그룹화
+            bracelet_historical_groups = {}
+            for bracelet in historical_bracelets:
+                cache_key = self._classify_bracelet_patterns(bracelet)
+                if cache_key not in bracelet_historical_groups:
+                    bracelet_historical_groups[cache_key] = []
+                bracelet_historical_groups[cache_key].append(bracelet)
+
+            # 각 그룹별로 가격 계산 (판매 성공률 포함)
             result = {}
             for key, items in bracelet_groups.items():
-                price_data = self._calculate_bracelet_group_prices(items, key)
+                historical_items = bracelet_historical_groups.get(key, [])
+                price_data = self._calculate_bracelet_group_prices(items, key, historical_items)
                 if price_data:
                     result[key] = price_data
 
@@ -406,7 +492,7 @@ class PatternGenerator:
         
         return cache_key
 
-    def _calculate_accessory_group_prices(self, items: List[AuctionAccessory], exclusive_key: str, role: str) -> Optional[Dict]:
+    def _calculate_accessory_group_prices(self, items: List[AuctionAccessory], exclusive_key: str, role: str, historical_items: List[AuctionAccessory] = None) -> Optional[Dict]:
         """그룹의 가격 통계 계산 - Multilinear Regression 모델"""
         if not items:
             return None
@@ -419,11 +505,27 @@ class PatternGenerator:
         filtered_items = []
         excluded_option_names = set()
 
-        # 현재 역할이 아닌 다른 역할의 exclusive 옵션 수집
+        # exclusive_key에서 현재 패턴에 포함된 옵션들 추출
+        current_pattern_options = set()
+        if ':' in exclusive_key:
+            pattern_part = exclusive_key.split(':', 3)[-1]  # "base" 또는 옵션 리스트
+            if pattern_part != "base":
+                try:
+                    # 예: "[('적주피', 1.2), ('추피', 1.6)]" -> {"적주피", "추피"}
+                    import ast
+                    option_list = ast.literal_eval(pattern_part)
+                    if isinstance(option_list, list):
+                        current_pattern_options = {opt_name for opt_name, _ in option_list}
+                except:
+                    pass  # 파싱 실패 시 빈 set 유지
+        
+        # 다른 역할의 exclusive 옵션들 중 현재 패턴에 포함된 것들은 제외하지 않음
         for group_role in ["dealer", "support"]:
             if group_role != role and part in self.EXCLUSIVE_OPTIONS:
                 for exc_opt in self.EXCLUSIVE_OPTIONS[part].get(group_role, []):
-                    excluded_option_names.add(exc_opt)
+                    # 현재 패턴에 포함된 옵션이 아닌 경우만 제외 대상에 추가
+                    if exc_opt not in current_pattern_options:
+                        excluded_option_names.add(exc_opt)
 
         # 아이템별로 옵션 검사
         for item in items:
@@ -438,11 +540,11 @@ class PatternGenerator:
         print(f"Items after exclusive option filtering: {len(filtered_items)}")
 
         # 역할별 관련 옵션 가져오기 (피처 순서 정의)
-        feature_names = config.role_related_options[role]
-        print(f"Feature names for {role}: {feature_names}")
+        all_feature_names = config.role_related_options[role]
+        print(f"Available features for {role}: {all_feature_names}")
 
         # 피처 벡터와 타겟 가격 데이터 수집
-        X = []  # 피처 매트릭스
+        X_all = []  # 전체 피처 매트릭스
         y = []  # 타겟 가격 벡터
         
         for item in filtered_items:
@@ -452,26 +554,81 @@ class PatternGenerator:
                 
                 # feature_names 순서대로 피처 벡터 생성
                 feature_vector = []
-                for feature_name in feature_names:
+                for feature_name in all_feature_names:
                     feature_vector.append(features.get(feature_name, 0.0))
                 
-                X.append(feature_vector)
+                X_all.append(feature_vector)
                 y.append(float(item.price))
         
         min_samples = config.pattern_generator_settings["min_regression_samples"]
-        if len(X) < min_samples:
-            print(f"Multilinear regression: 데이터 부족 ({len(X)}개)")
+        if len(X_all) < min_samples:
+            print(f"Multilinear regression: 데이터 부족 ({len(X_all)}개)")
             return None
         
-        # Multilinear regression using numpy
-        X_array = np.array(X)
+        X_all_array = np.array(X_all)
         y_array = np.array(y)
         
-        print(f"Feature matrix shape: {X_array.shape}")
+        # 각 피처별로 개별 상관관계 분석
+        print(f"Analyzing individual feature correlations:")
+        valid_features = []
+        valid_feature_indices = []
+        min_correlation = config.pattern_generator_settings.get("min_feature_correlation", 0.1)
+        
+        for i, feature_name in enumerate(all_feature_names):
+            # 해당 피처가 0이 아닌 샘플들로 상관관계 계산
+            feature_values = X_all_array[:, i]
+            non_zero_mask = feature_values > 0
+            
+            if np.sum(non_zero_mask) < 5:  # 최소 5개 샘플 필요
+                print(f"  {feature_name}: Skip (insufficient non-zero samples: {np.sum(non_zero_mask)})")
+                continue
+            
+            # 피어슨 상관계수 계산 (분산 체크 포함)
+            feature_subset = feature_values[non_zero_mask]
+            price_subset = y_array[non_zero_mask]
+            
+            # 분산이 0인지 체크 (모든 값이 동일한 경우)
+            if np.var(feature_subset) == 0 or np.var(price_subset) == 0:
+                print(f"  {feature_name}: Skip (zero variance)")
+                continue
+            
+            correlation = np.corrcoef(feature_subset, price_subset)[0, 1]
+            
+            if np.isnan(correlation):
+                print(f"  {feature_name}: Skip (correlation is NaN)")
+                continue
+            
+            abs_correlation = abs(correlation)
+            if abs_correlation >= min_correlation:
+                valid_features.append(feature_name)
+                valid_feature_indices.append(i)
+                print(f"  {feature_name}: Include (correlation: {correlation:.3f})")
+            else:
+                print(f"  {feature_name}: Skip (low correlation: {correlation:.3f})")
+        
+        if not valid_features:
+            print(f"No valid features found - using minimum price model")
+            min_price = int(np.min(y_array))
+            return {
+                'model_type': 'minimum_price',
+                'base_price': min_price,
+                'total_sample_count': len(filtered_items),
+                'r_squared': 0.0,
+                'intercept': None,
+                'coefficients': None,
+                'feature_names': None
+            }
+        
+        # 유효한 피처만으로 새로운 매트릭스 구성
+        X = X_all_array[:, valid_feature_indices]
+        feature_names = valid_features
+        
+        print(f"Selected features: {feature_names}")
+        print(f"Final feature matrix shape: {X.shape}")
         print(f"Target vector shape: {y_array.shape}")
         
         # 상수항을 위한 1의 열 추가
-        X_with_intercept = np.column_stack([np.ones(X_array.shape[0]), X_array])
+        X_with_intercept = np.column_stack([np.ones(X.shape[0]), X])
         
         # Non-negative Least Squares (NNLS) 사용
         try:
@@ -492,21 +649,93 @@ class PatternGenerator:
                 print(f"  {feature_name}: {coeff:.2f}")
             print(f"  Samples: {len(X)}")
             
-            # 모델 성능 평가 (R-squared)
+            # 모델 성능 평가
             y_pred = X_with_intercept @ coefficients_nnls
             ss_tot = np.sum((y_array - np.mean(y_array)) ** 2)
             ss_res = np.sum((y_array - y_pred) ** 2)
             r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
-            print(f"  R-squared: {r_squared:.4f}")
-            print(f"  Residual: {residual:.2f}")
             
-            return {
-                'intercept': intercept,
-                'coefficients': coeff_dict,
-                'feature_names': feature_names,
-                'total_sample_count': len(items),
-                'r_squared': r_squared
-            }
+            # 추가 성능 지표 계산
+            mae = np.mean(np.abs(y_array - y_pred))  # 평균 절대 오차
+            mape = np.mean(np.abs((y_array - y_pred) / y_array)) * 100  # 평균 절대 백분율 오차
+            rmse = np.sqrt(np.mean((y_array - y_pred) ** 2))  # RMSE
+            
+            # 가격 범위 정보
+            price_min, price_max = int(np.min(y_array)), int(np.max(y_array))
+            price_mean = int(np.mean(y_array))
+            
+            print(f"  R-squared: {r_squared:.4f}")
+            print(f"  MAPE (평균 오차율): {mape:.1f}%")
+            print(f"  MAE (평균 오차): {mae:,.0f} gold")
+            print(f"  Price range: {price_min:,} ~ {price_max:,} gold (평균: {price_mean:,})")
+            
+            # 모델 품질 판정
+            if mape <= 15:
+                quality = "Excellent"
+            elif mape <= 25:
+                quality = "Good"
+            elif mape <= 35:
+                quality = "Fair"
+            else:
+                quality = "Poor"
+            print(f"  Model Quality: {quality} (MAPE 기준)")
+            
+            # 판매 성공률 계산
+            success_rate_result = self._calculate_success_rate(historical_items or [])
+            if success_rate_result is not None:
+                success_rate, sold_count, expired_count = success_rate_result
+                print(f"  Success Rate: {success_rate:.1f}% (SOLD: {sold_count}, EXPIRED: {expired_count})")
+            
+            # R-squared 기반 모델 선택
+            min_r_squared = config.pattern_generator_settings.get("min_r_squared_threshold", 0.5)
+            
+            if r_squared < min_r_squared:
+                # R-squared가 낮으면 단순 최저가 모델 사용
+                min_price = int(np.min(y_array))
+                print(f"  ⚠️  Low R-squared ({r_squared:.3f}) - using minimum price model: {min_price:,} gold")
+                
+                result = {
+                    'model_type': 'minimum_price',
+                    'base_price': min_price,
+                    'total_sample_count': len(items),
+                    'r_squared': r_squared,
+                    # multilinear 필드들은 None으로 설정
+                    'intercept': None,
+                    'coefficients': None,
+                    'feature_names': None
+                }
+                
+                # 판매 성공률 및 개수 추가 (있는 경우만)
+                if success_rate_result is not None:
+                    success_rate, sold_count, expired_count = success_rate_result
+                    result['success_rate'] = success_rate
+                    result['sold_count'] = sold_count
+                    result['expired_count'] = expired_count
+                
+                return result
+            else:
+                # R-squared가 충분하면 multilinear regression 모델 사용
+                print(f"  ✅ Good R-squared ({r_squared:.3f}) - using multilinear model")
+                
+                result = {
+                    'model_type': 'multilinear',
+                    'intercept': intercept,
+                    'coefficients': coeff_dict,
+                    'feature_names': feature_names,
+                    'total_sample_count': len(items),
+                    'r_squared': r_squared,
+                    # 최저가 정보도 같이 저장
+                    'base_price': int(np.min(y_array))
+                }
+                
+                # 판매 성공률 및 개수 추가 (있는 경우만)
+                if success_rate_result is not None:
+                    success_rate, sold_count, expired_count = success_rate_result
+                    result['success_rate'] = success_rate
+                    result['sold_count'] = sold_count
+                    result['expired_count'] = expired_count
+                
+                return result
             
         except Exception as e:
             print(f"Non-negative Least Squares failed: {e}")
@@ -514,17 +743,7 @@ class PatternGenerator:
             traceback.print_exc()
             return None
 
-    def _calculate_common_option_values(self, items: List[AuctionAccessory], role: str, base_price: int, slope: float) -> Dict: 
-        """
-        레거시 메서드 - multilinear regression에서는 사용하지 않음
-        
-        각 Common 옵션 값의 추가 가치를 계산 (Linear regression 모델 기반)
-        이 메서드는 기존 방식과의 호환성을 위해 보존됨
-        """
-        print("Warning: _calculate_common_option_values is deprecated in multilinear regression mode")
-        return {}
-
-    def _calculate_bracelet_group_prices(self, items: List[AuctionBracelet], cache_key: str) -> Optional[Dict]:
+    def _calculate_bracelet_group_prices(self, items: List[AuctionBracelet], cache_key: str, historical_items: List[AuctionBracelet] = None) -> Optional[Dict]:
         """팔찌 그룹의 가격 통계 계산"""
         if not items:
             return None
@@ -543,11 +762,26 @@ class PatternGenerator:
         prices = sorted([int(item.price) for item in valid_items])
         reasonable_price = calculate_reasonable_price(prices)
         
+        # 판매 성공률 계산
+        success_rate_result = self._calculate_bracelet_success_rate(historical_items or [])
+        if success_rate_result is not None:
+            success_rate, sold_count, expired_count = success_rate_result
+            print(f"  Success Rate: {success_rate:.1f}% (SOLD: {sold_count}, EXPIRED: {expired_count})")
+        
         if reasonable_price and reasonable_price > 0:
-            return {
+            result = {
                 'price': reasonable_price,
                 'total_sample_count': len(valid_items)
             }
+            
+            # 판매 성공률 및 개수 추가 (있는 경우만)
+            if success_rate_result is not None:
+                success_rate, sold_count, expired_count = success_rate_result
+                result['success_rate'] = success_rate
+                result['sold_count'] = sold_count
+                result['expired_count'] = expired_count
+                
+            return result
         
         return None
 
@@ -569,10 +803,48 @@ class PatternGenerator:
         except Exception as e:
             print(f"Warning: Failed to send pattern update signal: {e}")
 
+    def _calculate_success_rate(self, historical_items: List[AuctionAccessory]) -> Optional[tuple[float, int, int]]:
+        """악세서리 판매 성공률 계산: SOLD / (SOLD + EXPIRED)
+        
+        Returns:
+            tuple[float, int, int] | None: (success_rate, sold_count, expired_count) 또는 None
+        """
+        if not historical_items:
+            return None
+        
+        sold_count = sum(1 for item in historical_items if item.status == AuctionStatus.SOLD)
+        expired_count = sum(1 for item in historical_items if item.status == AuctionStatus.EXPIRED)
+        total_count = sold_count + expired_count
+        
+        if total_count == 0:
+            return None
+        
+        success_rate = (sold_count / total_count) * 100
+        return success_rate, sold_count, expired_count
+
+    def _calculate_bracelet_success_rate(self, historical_items: List[AuctionBracelet]) -> Optional[tuple[float, int, int]]:
+        """팔찌 판매 성공률 계산: SOLD / (SOLD + EXPIRED)
+        
+        Returns:
+            tuple[float, int, int] | None: (success_rate, sold_count, expired_count) 또는 None
+        """
+        if not historical_items:
+            return None
+        
+        sold_count = sum(1 for item in historical_items if item.status == AuctionStatus.SOLD)
+        expired_count = sum(1 for item in historical_items if item.status == AuctionStatus.EXPIRED)
+        total_count = sold_count + expired_count
+        
+        if total_count == 0:
+            return None
+        
+        success_rate = (sold_count / total_count) * 100
+        return success_rate, sold_count, expired_count
+
     def _round_combat_stat(self, grade: str, value: float) -> int:
         """전투 특성 값을 기준값으로 내림"""
-        thresholds = [40, 50, 60, 70, 80, 90]
-        combat_stat_bonus = 20 if grade == "고대" else 0
+        thresholds = config.bracelet_settings["combat_stat_thresholds"]
+        combat_stat_bonus = config.bracelet_settings["ancient_combat_stat_bonus"] if grade == "고대" else 0
         adjusted_thresholds = [t + combat_stat_bonus for t in thresholds]
 
         # 가장 가까운 하위 threshold 반환
@@ -583,8 +855,8 @@ class PatternGenerator:
 
     def _round_base_stat(self, grade: str, value: float) -> int:
         """기본스탯 값을 기준값으로 내림"""
-        thresholds = [6400, 8000, 9600, 11200]
-        base_stat_bonus = 3200 if grade == "고대" else 0
+        thresholds = config.bracelet_settings["base_stat_thresholds"]
+        base_stat_bonus = config.bracelet_settings["ancient_base_stat_bonus"] if grade == "고대" else 0
         adjusted_thresholds = [t + base_stat_bonus for t in thresholds]
 
         # 가장 가까운 하위 threshold 반환
@@ -602,7 +874,7 @@ class PatternGenerator:
         print("Starting Pattern Generator Service...")
         
         # IPC 서버 설정
-        ipc_server = IPCServer()
+        ipc_server = IPCServer(service_name="pattern_generator")
         
         def handle_collection_completed(message):
             """데이터 수집 완료 신호 처리"""
@@ -611,6 +883,11 @@ class PatternGenerator:
                 completion_time = datetime.fromisoformat(completion_time_str)
                 
                 print(f"Received collection completion signal: {completion_time.isoformat()}")
+                
+                # 이미 패턴 생성 중인지 체크
+                if self.is_generating:
+                    print(f"Pattern generation already in progress, ignoring signal")
+                    return {'status': 'ignored', 'message': 'Pattern generation already in progress'}
                 
                 # 패턴 생성 실행
                 success = self.update_pattern(
@@ -716,9 +993,9 @@ def main():
         duration = (end_time - start_time).total_seconds()
         
         if success:
-            print(f"Pattern generation completed! Duration: {duration:.1f}s")
+            print(f"Pattern generation completed! Duration: {duration}s")
         else:
-            print(f"Pattern generation failed! Duration: {duration:.1f}s")
+            print(f"Pattern generation failed! Duration: {duration}s")
 
 
 if __name__ == "__main__":

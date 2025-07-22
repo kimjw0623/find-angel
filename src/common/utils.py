@@ -1,162 +1,6 @@
 from datetime import datetime
 import re
 from typing import List, Dict, Optional, Any
-"""
-Second 45 공퍼(0.4, 0.95, 1.55), 53 깡공(80, 195, 390), 44 낙인력(2.15, 4.8, 8), 46 무공퍼(0.8, 1.8, 3)
-Second 54 깡무공(195, 480, 960), 57 상태이상공격지속시간(0.2, 0.5, 1), 43 아덴게이지(1.6, 3.6, 6)
-Second 51 아공강(1.35, 3, 5), 52 아피강(2, 4.5, 7.5), 42 적주피(0.55, 1.2, 2), 58 전투중생회(10, 25, 50)
-Second 56 최마(6, 15, 30), 55 최생(1300, 3250, 6500), 41 추피(0.7, 1.6, 2.6), 49 치적(0.4, 0.95, 1.55)
-Second 50 치피(1.1, 2.4, 4.0), 48 아군보호막(0.95, 2.1, 3.5), 47 아군회복(0.95, 2.1, 3.5)
-그런데 그냥 하옵, 중옵, 상옵을 1, 2, 3으로 두면 된다.
-Quality: 품질
-Grade: 고대, 유물 등
-LeveL: 연마 단계
-Scale: 하옵 중옵 상옵
-
-First 8 아크패시브
-Second 1 깨달음
-Second 2 도약
-First 7 연마 효과
-Second 쭉쭉..
-Second ...
-Second ...
-First 6 감소 효과
-First 3 각인 효과
-First 2 전투 특성(치특신제인숙)
-First 1 팔찌 기본 효과(힘민지체)
-First 4 팔찌 옵션 수량
-Second 1 고졍 효과 수량
-Second 2 부여 효과 수량
-First 5 팔찌 특수 효과
-
-"""
-number_to_scale = {
-    # 하중상을 뭐라고 할 질 모르겠어서(level, grade는 이미 있다...) 일단 scale로 두었다.
-    # 공격력 관련
-    "공퍼": {
-        0.4: 1,
-        0.95: 2,
-        1.55: 3,
-    },
-    "깡공": {
-        80.0: 1,
-        195.0: 2,
-        390.0: 3,
-    },
-    "무공퍼": {
-        0.8: 1,
-        1.8: 2,
-        3.0: 3,
-    },
-    "깡무공": {
-        195.0: 1,
-        480.0: 2,
-        960.0: 3,
-    },
-    # 치명타 관련
-    "치적": {
-        0.4: 1,
-        0.95: 2,
-        1.55: 3,
-    },
-    "치피": {
-        1.1: 1,
-        2.4: 2,
-        4.0: 3,
-    },
-    # 피해량 관련
-    "추피": {
-        0.7: 1,
-        1.6: 2,
-        2.6: 3,
-    },
-    "적주피": {
-        0.55: 1,
-        1.2: 2,
-        2.0: 3,
-    },
-    # 서포터 관련
-    "아덴게이지": {
-        1.6: 1,
-        3.6: 2,
-        6.0: 3,
-    },
-    "낙인력": {
-        2.15: 1,
-        4.8: 2,
-        8.0: 3,
-    },
-    "아군회복": {
-        0.95: 1,
-        2.1: 2,
-        3.5: 3,
-    },
-    "아군보호막": {
-        0.95: 1,
-        2.1: 2,
-        3.5: 3,
-    },
-    "아공강": {
-        1.35: 1,
-        3.0: 2,
-        5.0: 3,
-    },
-    "아피강": {
-        2.0: 1,
-        4.5: 2,
-        7.5: 3,
-    },
-    # 기타 스탯
-    "최마": {
-        6.0: 1,
-        15.0: 2,
-        30.0: 3,
-    },
-    "최생": {
-        1300.0: 1,
-        3250.0: 2,
-        6500.0: 3,
-    },
-    "상태이상공격지속시간": {
-        0.2: 1,
-        0.5: 2,
-        1.0: 3,
-    },
-    "전투중생회": {
-        10.0: 1,
-        25.0: 2,
-        50.0: 3,
-    },
-}
-# 무공퍼, 공퍼, 깡무공, 깡공은 제외
-ABB_TO_FULLNAME = {
-    "추피": "추가 피해",
-    "적주피": "적에게 주는 피해 증가",
-    "아덴게이지": "세레나데, 신성, 조화 게이지 획득량 증가",
-    "낙인력": "낙인력",
-    "아군회복": "파티원 회복 효과",
-    "아군보호막": "파티원 보호막 효과",
-    "치적": "치명타 적중률",
-    "치피": "치명타 피해",
-    "아공강": "아군 공격력 강화 효과",
-    "아피강": "아군 피해량 강화 효과",
-    "최생": "최대 생명력",
-    "최마": "최대 마나",
-    "상태이상공격지속시간": "상태이상 공격 지속시간",
-    "전투중생회": "전투 중 생명력 회복량"
-}
-
-FULLNAME_TO_ABB = {value: key for key, value in ABB_TO_FULLNAME.items()}
-
-def parse_datetime(date_string):
-    match = re.match(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?', date_string)
-    if match:
-        base_time = datetime.strptime(match.group(1), "%Y-%m-%dT%H:%M:%S")
-        if match.group(2):
-            microseconds = int(match.group(2)[1:].ljust(6, '0')[:6])
-            return base_time.replace(microsecond=microseconds)
-        return base_time
-    raise ValueError(f"Invalid datetime format: {date_string}")
 
 def find_first_empty_cell(service, SPREADSHEET_ID, sheet_name, column="A"):
     # 지정된 열의 모든 셀 가져오기
@@ -190,151 +34,13 @@ def find_last_nonempty_cell(service, SPREADSHEET_ID, sheet_name, column="A"):
     # 모든 셀이 채워져 있으면 마지막 행 반환
     return len(values)
 
-option_dict = {
-    "추피": 41,         # "추가 피해"
-    "적주피": 42,       # "적에게 주는 피해"
-    "아덴게이지": 43,    # "세레나데, 신성, 조화 게이지 획득량 증가"
-    "낙인력": 44,       # "낙인력"
-    "공퍼": 45,         # "공격력 "
-    "무공퍼": 46,       # "무기 공격력 "
-    "아군회복": 47,     # "파티원 회복 효과"
-    "아군보호막": 48,    # "파티원 보호막 효과"
-    "치적": 49,         # "치명타 적중률"
-    "치피": 50,         # "치명타 피해"
-    "아공강": 51,       # "아군 공격력 강화 효과"
-    "아피강": 52,       # "아군 피해량 강화 효과"
-    "깡공": 53,         # "무기 공격력 "
-    "깡무공": 54,       # "공격력 " # 뒤에 띄어 쓰기 있음. 깡무공, 깡공, 무공퍼도 마찬가지
-    "최생": 55,         # "최대 생명력"
-    "최마": 56,         # "최대 마나"
-    "상태이상공격지속시간": 57, # 상태이상 공격 지속시간
-    "전투중생회": 58,   # "전투 중 생명력 회복량"
-}
-
-option_dict_bracelet_first = {
-    "팔찌 기본 효과": 1,
-    "전투 특성": 2,
-    "팔찌 옵션 수량": 4,
-    "팔찌 특수 효과": 5,
-}
-
-option_dict_bracelet_second = {
-    "고정 효과 수량": 1,
-    "부여 효과 수량": 2,
-    "힘": 3,
-    "민첩": 4,
-    "지능": 5,
-    "체력": 6,
-    "치명": 15,
-    "특화": 16,
-    "제압": 17,
-    "신속": 18,
-    "인내": 19,
-    "숙련": 20,
-    "강타": 39,
-    "공격 및 이동 속도 증가": 60,
-    "긴급 수혈": 33,
-    "돌진": 38,
-    "마나회수": 36,
-    "마법 방어력": 2,
-    "멸시": 29,
-    "무시": 30,
-    "물리 방어력": 1,
-    "반격": 28,
-    "반전": 31,
-    "속공": 26,
-    "시드 이하 받는 피해 감소": 62,
-    "시드 이하 주는 피해 증가": 61,
-    "앵콜": 35,
-    "오뚝이": 37,
-    "응급 처치": 34,
-    "이동기 및 기상기 재사용 대기시간 감소": 63,
-    "전투 자원 회복량": 59,
-    "전투 중 생명력 회복량": 6,
-    "최대 마나": 4,
-    "최대 생명력": 3,
-    "타격": 40,
-    "투자": 27,
-    "피격 이상 면역 효과": 64,
-    "회생": 32,
-}
-
-necklace_only_list = [
-    "추피", "적주피", "아덴게이지", "낙인력"
-]
-
-dmg_increment_dict = {
-    "추피": {
-        "0.7": 0.495,
-        "1.6": 1.131,
-        "2.6": 1.839,
-    },
-    "적주피": {
-        "0.55": 0.55,
-        "1.2": 1.2,
-        "2.0": 2.0,
-    },
-    "공퍼": {
-        "0.4": 0.358,
-        "0.95": 0.850,
-        "1.55": 1.387,
-    },
-    "무공퍼": {
-        "0.8": 0.306,
-        "1.8": 0.686,
-        "3.0": 1.14,
-    },
-    "치피": {
-        "1.1": 0.365,
-        "2.4": 0.797,
-        "4.0": 1.328,
-    },
-    "치적": {
-        "0.4": 0.273,
-        "0.95": 0.648,
-        "1.55": 1.057,
-    },
-    "깡공": {   # 인식 상 데미지 증가 비율 계수를 0.5정도로 잡았다...
-        "80.0": 0.059,
-        "195.0": 0.144,
-        "390.0": 0.288,
-    },
-    "깡무공": {
-        "195.0": 0.061,
-        "480.0": 0.151,
-        "960.0": 0.302,
-    },
-    "품질": {  # 1당 힘민지 기대 증가량으로 인한 딜상승.. 인데 좀 낮출 필요가 있다
-        "목걸이": 0.00785*0.5,
-        "귀걸이": 0.00610*0.5,
-        "반지": 0.00567*0.5
-    }
-}
-
-effective_option_list = dmg_increment_dict.keys()
-
-level_enpoint = {
-    "고대": {
-        0: 0,
-        1: 2,
-        2: 5,
-        3: 9,
-    },
-    "유물": {
-        0: 0,
-        1: 1,
-        2: 3,
-        3: 6,
-    },
-}
-
-
 def fix_dup_options(item):
     """ For dealer accessory, fix duplicated options and long names
 
     Args:
         item: _description_
     """
+    from src.common.config import config
     options = item["Options"]
     for option in options:
         option_name = option["OptionName"]
@@ -348,35 +54,37 @@ def fix_dup_options(item):
                 option["OptionName"] = "무공퍼"
             else:
                 option["OptionName"] = "깡무공"
-        if option_name in FULLNAME_TO_ABB.keys():
-            option["OptionName"] = FULLNAME_TO_ABB[option_name]
+        if option_name in config.FULLNAME_TO_ABB.keys():
+            option["OptionName"] = config.FULLNAME_TO_ABB[option_name]
 
 def extract_supporter_options(item):
+    from src.common.config import config
     result = []
     options = item["Options"]
     for option in options:
         option_name = option["OptionName"]
         if (option_name == "아덴게이지") or (option_name == "아군회복") or (option_name == "아공강"):
-            result.append((option_name, number_to_scale[option_name][option["Value"]]))
+            result.append((option_name, config.number_to_scale[option_name][option["Value"]]))
     for option in options:
         option_name = option["OptionName"]
         if (option_name == "낙인력") or (option_name == "아군보호막") or (option_name == "아피강"):
-            result.append((option_name, number_to_scale[option_name][option["Value"]]))
+            result.append((option_name, config.number_to_scale[option_name][option["Value"]]))
     return tuple(result)
 
 def calc_dmg_increment_percent(item):
-    """ Caulcate damage increment percent of an item, as dealer..
+    """ Calculate damage increment percent of an item, as dealer.
 
     Args:
         item: dictionary: the optionNames should be fixed by fix_dup_options.
         That is, it must be called after fix_dup_options.
     """
+    from src.common.config import config
     dmg = 1.0
     options = item["Options"]
     for option in options:
       option_name = option["OptionName"]
-      if option_name in effective_option_list:
-        dmg *= 1 + 0.01 * dmg_increment_dict[option_name][str(option["Value"])]
+      if option_name in config.dmg_increment_dict:
+        dmg *= 1 + 0.01 * config.dmg_increment_dict[option_name][str(option["Value"])]
     if "목걸이" in item["Name"]:
         part = "목걸이"
     elif "귀걸이" in item["Name"]:
@@ -385,25 +93,9 @@ def calc_dmg_increment_percent(item):
         part = "반지"
 
     # 품질 고려
-    dmg *= 1 + 0.01 * dmg_increment_dict["품질"][part] * (item["GradeQuality"] - 67)
-        # print(dmg)
+    dmg *= 1 + 0.01 * config.dmg_increment_dict["품질"][part] * (item["GradeQuality"] - 67)
     dmg_increment_percent = 100.0 * (dmg - 1)
     return dmg_increment_percent
-
-# 카테고리 코드 매핑
-CATEGORY_CODES = {
-    "목걸이": 200010,
-    "귀걸이": 200020,
-    "반지": 200030,
-    "팔찌": 200040
-}
-
-# 검색 옵션 매핑
-SEARCH_OPTION_CODES = {
-    "팔찌 옵션 수량": 4,
-    "고정 효과 수량": 1,
-    "부여 효과 수량": 2
-}
 
 def get_current_timestamp() -> str:
     """현재 시간을 YYYYMMDD_HHMM 형식으로 반환"""
@@ -421,7 +113,8 @@ def create_basic_search_request(grade: str, part: str, enhancement_level: Option
         quality: 품질
         page_no: 페이지 번호
     """
-    category_code = CATEGORY_CODES[part]
+    from src.common.config import config
+    category_code = config.CATEGORY_CODES[part]
     
     return {
         "ItemLevelMin": 0,
@@ -448,13 +141,160 @@ def create_basic_search_request(grade: str, part: str, enhancement_level: Option
 
 def add_search_option(first_option: str, second_option: str, min_value: int, max_value: Optional[int] = None) -> Dict[str, Any]:
     """검색 옵션 생성 (문자열을 숫자 코드로 매핑)"""
+    from src.common.config import config
     if max_value is None:
         max_value = min_value
         
     return {
-        "FirstOption": SEARCH_OPTION_CODES[first_option],
-        "SecondOption": SEARCH_OPTION_CODES[second_option],
+        "FirstOption": config.SEARCH_OPTION_CODES[first_option],
+        "SecondOption": config.SEARCH_OPTION_CODES[second_option],
         "MinValue": min_value,
         "MaxValue": max_value
     }
+
+def calculate_reasonable_price(prices: List[int], min_samples: int = 10) -> Optional[int]:
+    """경매장 가격 데이터에서 IQR을 이용해 이상치를 제거하고 최저가를 계산합니다."""
+    import numpy as np
+    
+    real_min_sample = 2
+    if len(prices) < min_samples:
+        if len(prices) < real_min_sample:
+            print(f"가격분석 | 데이터 정말 부족: {len(prices)}개/{min_samples}개")
+            return 0
+        else:
+            print(f"가격분석 | 데이터 부족하지만: {len(prices)}개/{min_samples}개, 최저가에서 두 번째 반환 {prices[1]:,}")
+            return prices[1]
+    
+    q1, q3 = np.percentile(prices, [25, 75])
+    iqr = q3 - q1
+    lower_bound, upper_bound = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+    filtered_prices = [p for p in prices if lower_bound <= p <= upper_bound]
+    
+    if filtered_prices:
+        min_price = min(filtered_prices)
+        print(f"가격분석 | 원본: {len(prices)}개 {min(prices):,}~{max(prices):,} | Q1/Q2/Q3: {int(q1):,}/{int(np.median(prices)):,}/{int(q3):,} | 이상치제거: {len(prices)-len(filtered_prices)}개 | 최종최저가: {min_price:,}")
+        return min_price
+    
+    print("데이터 없음")
+    return 0
+
+def normalize_common_option_value(option_name: str, option_value: float, config) -> float:
+    """
+    Common 옵션 값을 0~1로 정규화
+    
+    Args:
+        option_name: 옵션 이름 ("깡공", "최생" 등)
+        option_value: 실제 옵션 값 (80, 1300 등)
+        config: Config 인스턴스
+        
+    Returns:
+        0.0 ~ 1.0 사이의 정규화된 값
+    """
+    if option_name not in config.common_options:
+        return 0.0  # 해당 옵션이 없으면 0
+        
+    values = config.common_options[option_name]
+    max_value = max(values)  # 최대값으로 정규화
+    
+    # 값이 범위를 벗어나는 경우 처리
+    if option_value <= 0:
+        return 0.0
+    if option_value >= max_value:
+        return 1.0
+    
+    return option_value / max_value
+
+def extract_common_option_features(item, role: str, config) -> Dict[str, float]:
+    """
+    아이템에서 역할별 Common 옵션들을 추출하고 정규화된 feature vector 생성
+    
+    Args:
+        item: AuctionAccessory 인스턴스
+        role: "dealer" 또는 "support"
+        config: Config 인스턴스
+        
+    Returns:
+        Dict[옵션명, 정규화된값] (0~1)
+    """
+    features = {}
+    related_options = config.role_related_options[role]
+    
+    # 모든 관련 옵션을 0으로 초기화
+    for opt_name in related_options:
+        features[opt_name] = 0.0
+    
+    # base_stat = "힘민지" 처리
+    if "힘민지" in related_options and hasattr(item, 'base_stat') and item.base_stat:
+        try:
+            base_stat_ratio = calculate_base_stat_ratio(
+                part=item.part,
+                enhancement_level=item.level, 
+                base_stat=item.base_stat,
+                config=config
+            )
+            features["힘민지"] = base_stat_ratio
+        except (ValueError, TypeError):
+            features["힘민지"] = 0.0
+    
+    # 다른 Common 옵션들 처리
+    if hasattr(item, 'raw_options'):
+        for option in item.raw_options:
+            opt_name = option.option_name
+            if opt_name in related_options and opt_name != "힘민지":
+                try:
+                    normalized_value = normalize_common_option_value(
+                        option_name=opt_name,
+                        option_value=float(option.option_value),
+                        config=config
+                    )
+                    features[opt_name] = normalized_value
+                except (ValueError, TypeError):
+                    continue
+    
+    return features
+
+def calculate_base_stat_ratio(part: str, enhancement_level: int, base_stat: int, config) -> float:
+    """
+    악세서리의 base_stat에 따른 비율 계산 (Linear regression 모델용)
+    
+    Args:
+        part: 부위 ("반지", "귀걸이", "목걸이")
+        enhancement_level: 연마 레벨 (0-3)
+        base_stat: 실제 base_stat 값
+        config: Config 인스턴스
+        
+    Returns:
+        0.0 ~ 1.0 사이의 비율 값
+    """
+    if part not in config.accessory_base_stat_ranges:
+        raise ValueError(f"Unknown accessory part: {part}")
+        
+    if enhancement_level not in config.accessory_base_stat_ranges[part]:
+        raise ValueError(f"Unknown enhancement level: {enhancement_level} for {part}")
+    
+    min_stat, max_stat = config.accessory_base_stat_ranges[part][enhancement_level]
+    
+    # 범위를 벗어나는 경우 처리
+    if base_stat <= min_stat:
+        return 0.0
+    if base_stat >= max_stat:
+        return 1.0
+    
+    # 비율 계산 (모델별로 분기 - 추후 확장용)
+    model_type = config.base_stat_ratio_settings["model_type"]
+    ratio = (base_stat - min_stat) / (max_stat - min_stat)
+    
+    if model_type == "linear":
+        return ratio
+    elif model_type == "quadratic":
+        return ratio ** 2
+    elif model_type == "sqrt":
+        return ratio ** 0.5
+    elif model_type == "exponential":
+        # e^(-2*(1-ratio)) - e^(-2) / (1 - e^(-2))로 정규화
+        import math
+        return (math.exp(-2 * (1 - ratio)) - math.exp(-2)) / (1 - math.exp(-2))
+    else:
+        # 기본값은 linear
+        return ratio
 

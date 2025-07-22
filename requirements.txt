@@ -12,4 +12,4 @@ python-dotenv>=1.0.0
 # 개발 도구
 pytest>=7.0.0
 black>=23.0.0
-mypy>=1.0.0
+mypy>=1.0.0scipy

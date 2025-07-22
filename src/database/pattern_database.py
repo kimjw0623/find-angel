@@ -12,9 +12,7 @@ PatternBase = declarative_base()
 class AuctionPricePattern(PatternBase):
     __tablename__ = 'auction_price_pattern'
     
-    id = Column(Integer, primary_key=True)
-    pattern_id = Column(String, nullable=False, unique=True)
-    search_cycle_id = Column(String, nullable=False)  # timestamp를 search_cycle_id로 변경
+    pattern_datetime = Column(DateTime, primary_key=True)
     is_active = Column(Boolean, nullable=False, default=False)
     
     accessory_patterns = relationship("AccessoryPricePattern", back_populates="pattern")
@@ -24,40 +22,40 @@ class AccessoryPricePattern(PatternBase):
     __tablename__ = 'accessory_price_patterns'
     
     id = Column(Integer, primary_key=True)
-    pattern_id = Column(String, ForeignKey('auction_price_pattern.pattern_id'), nullable=False)
+    pattern_datetime = Column(DateTime, ForeignKey('auction_price_pattern.pattern_datetime'), nullable=False)
     grade = Column(String, nullable=False)
     part = Column(String, nullable=False)
     level = Column(Integer, nullable=False)
     pattern_key = Column(String, nullable=False)
     role = Column(String, nullable=False)
     
-    quality_prices = Column(SQLiteJSON)  # {"60": price, "70": price, "80": price, "90": price}
+    # Multilinear regression 모델 데이터
+    intercept = Column(Float, nullable=False)          # 절편 (base_price)
+    coefficients = Column(SQLiteJSON, nullable=False)  # 계수 벡터 {feature_name: coefficient}
+    feature_names = Column(SQLiteJSON, nullable=False)  # 피처 순서 [힘민지, 깡공, ...]
     total_sample_count = Column(Integer, nullable=False)
-    common_option_values = Column(SQLiteJSON)
     
     pattern = relationship("AuctionPricePattern", back_populates="accessory_patterns")
 
     __table_args__ = (
-        Index('idx_acc_pattern_search', 'pattern_id', 'grade', 'part', 'level', 'pattern_key', 'role'),
+        Index('idx_acc_pattern_search', 'pattern_datetime', 'grade', 'part', 'level', 'pattern_key', 'role'),
     )
 
 class BraceletPricePattern(PatternBase):
     __tablename__ = 'bracelet_price_patterns'
     
     id = Column(Integer, primary_key=True)
-    pattern_id = Column(String, ForeignKey('auction_price_pattern.pattern_id'), nullable=False)
+    pattern_datetime = Column(DateTime, ForeignKey('auction_price_pattern.pattern_datetime'), nullable=False)
     grade = Column(String, nullable=False)
-    pattern_type = Column(String, nullable=False)
-    combat_stats = Column(String)
-    base_stats = Column(String)
+    sorted_stats = Column(String, nullable=False)  # 새로운 통합 스탯 필드
     extra_slots = Column(String)
     price = Column(Integer, nullable=False)
-    total_sample_count = Column(Integer, nullable=False)  # Added field
+    total_sample_count = Column(Integer, nullable=False)
     
     pattern = relationship("AuctionPricePattern", back_populates="bracelet_patterns")
 
     __table_args__ = (
-        Index('idx_bracelet_pattern_search', 'pattern_id', 'grade', 'pattern_type'),
+        Index('idx_bracelet_pattern_search', 'pattern_datetime', 'grade', 'sorted_stats'),
     )
 
 class PatternDatabaseManager(BaseDatabaseManager):

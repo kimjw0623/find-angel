@@ -189,13 +189,17 @@ class PatternGenerator:
                 write_duration = (datetime.now() - start_time).total_seconds()
                 print(f"Writing patterns duration: {write_duration:.1f}s")
 
-                print(f"Pattern collection created at {pattern_datetime.isoformat()}")
-                
-                # 패턴 업데이트 완료 신호 발송 (옵션)
-                if send_signal:
-                    self._send_pattern_update_signal(pattern_datetime)
-                
-                return True
+            completion_time = datetime.now()
+            total_duration = (completion_time - start_time).total_seconds()
+            print(f"Pattern generation completed at {completion_time.isoformat()}")
+            print(f"Total pattern generation duration: {total_duration:.1f}s")
+            print(f"Pattern collection created for datetime: {pattern_datetime.isoformat()}")
+            
+            # 패턴 업데이트 완료 신호 발송 (옵션)
+            if send_signal:
+                self._send_pattern_update_signal(pattern_datetime, completion_time)
+            
+            return True
 
         except Exception as e:
             print(f"Error updating price patterns: {e}")
@@ -547,15 +551,21 @@ class PatternGenerator:
         
         return None
 
-    def _send_pattern_update_signal(self, pattern_datetime: datetime):
+    def _send_pattern_update_signal(self, pattern_datetime: datetime, completion_time: datetime = None):
         """패턴 업데이트 완료 신호를 item_evaluator에 발송"""
         try:
             from src.common.ipc_utils import notify_pattern_update
             result = notify_pattern_update(pattern_datetime)
-            if result:
-                print(f"📡 Pattern update signal sent via IPC: {pattern_datetime.isoformat()}")
+            
+            if completion_time:
+                time_display = completion_time.isoformat()
             else:
-                print(f"📡 Pattern update signal sent (no active listeners): {pattern_datetime.isoformat()}")
+                time_display = pattern_datetime.isoformat()
+            
+            if result:
+                print(f"📡 Pattern update signal sent via IPC at {time_display}")
+            else:
+                print(f"📡 Pattern update signal sent (no active listeners) at {time_display}")
         except Exception as e:
             print(f"Warning: Failed to send pattern update signal: {e}")
 

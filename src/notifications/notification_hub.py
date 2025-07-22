@@ -51,7 +51,7 @@ class NotificationHub:
         self.tracking_items = {}  # 추적 중인 아이템들
         
         # IPC 서버 설정
-        self.ipc_server = IPCServer("/tmp/find_angel_notifications.sock")
+        self.ipc_server = IPCServer(service_name="notification_hub")
         self.ipc_server.register_handler(
             MessageTypes.ITEM_FOUND, 
             self._handle_item_notification

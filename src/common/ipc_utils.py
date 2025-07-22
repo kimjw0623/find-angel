@@ -13,8 +13,12 @@ from contextlib import contextmanager
 class IPCServer:
     """Unix 소켓 기반 IPC 서버"""
     
-    def __init__(self, socket_path: str = "/tmp/find_angel_ipc.sock"):
-        self.socket_path = socket_path
+    def __init__(self, service_name: str = "default", socket_path: str = None):
+        if socket_path is None:
+            self.socket_path = f"/tmp/find_angel_{service_name}_ipc.sock"
+        else:
+            self.socket_path = socket_path
+        self.service_name = service_name
         self.server_socket = None
         self.is_running = False
         self.message_handlers: Dict[str, Callable] = {}
@@ -83,8 +87,12 @@ class IPCServer:
 class IPCClient:
     """Unix 소켓 기반 IPC 클라이언트"""
     
-    def __init__(self, socket_path: str = "/tmp/find_angel_ipc.sock"):
-        self.socket_path = socket_path
+    def __init__(self, target_service: str = "pattern_generator", socket_path: str = None):
+        if socket_path is None:
+            self.socket_path = f"/tmp/find_angel_{target_service}_ipc.sock"
+        else:
+            self.socket_path = socket_path
+        self.target_service = target_service
         
     def send_message(self, message_type: str, data: Dict[str, Any] = None, timeout: float = 1.0) -> Optional[Dict]:
         """메시지 전송 (응답 대기)"""
@@ -155,27 +163,27 @@ class MessageTypes:
     COLLECTION_COMPLETED = "collection_completed"  # 새로 추가
     HEALTH_CHECK = "health_check"
 
-# 전역 IPC 클라이언트 (싱글톤)
-_ipc_client = None
+# 전역 IPC 클라이언트 관리 (서비스별)
+_ipc_clients = {}
 
-def get_ipc_client() -> IPCClient:
-    """전역 IPC 클라이언트 인스턴스 반환"""
-    global _ipc_client
-    if _ipc_client is None:
-        _ipc_client = IPCClient()
-    return _ipc_client
+def get_ipc_client(target_service: str = "pattern_generator") -> IPCClient:
+    """서비스별 IPC 클라이언트 인스턴스 반환"""
+    global _ipc_clients
+    if target_service not in _ipc_clients:
+        _ipc_clients[target_service] = IPCClient(target_service=target_service)
+    return _ipc_clients[target_service]
 
-def notify_pattern_update(pattern_datetime: datetime):
-    """패턴 업데이트 알림 전송 (일방향)"""
-    client = get_ipc_client()
+def notify_pattern_update(pattern_datetime: datetime, target_service: str = "item_checker"):
+    """패턴 업데이트 알림 전송 (일방향) - item_checker에게 알림"""
+    client = get_ipc_client(target_service)
     return client.send_notification(
         MessageTypes.PATTERN_UPDATED,
         {'pattern_datetime': pattern_datetime.isoformat()}
     )
 
-def notify_collection_completed(completion_datetime: datetime):
-    """데이터 수집 완료 알림 전송 (일방향)"""
-    client = get_ipc_client()
+def notify_collection_completed(completion_datetime: datetime, target_service: str = "pattern_generator"):
+    """데이터 수집 완료 알림 전송 (일방향) - pattern_generator에게 알림"""
+    client = get_ipc_client(target_service)
     return client.send_notification(
         MessageTypes.COLLECTION_COMPLETED,
         {'completion_datetime': completion_datetime.isoformat()}

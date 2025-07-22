@@ -32,7 +32,7 @@ class ItemEvaluator:
         try:
             from src.common.ipc_utils import IPCServer, MessageTypes
             
-            self.ipc_server = IPCServer()
+            self.ipc_server = IPCServer(service_name="item_checker")
             
             # 패턴 업데이트 메시지 핸들러 등록
             self.ipc_server.register_handler(

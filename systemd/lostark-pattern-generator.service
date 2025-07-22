@@ -1,0 +1,25 @@
+[Unit]
+Description=Lost Ark Pattern Generator Service
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=ahrrri
+WorkingDirectory=/home/ahrrri/find-angel
+Environment=PATH=/home/ahrrri/find-angel/venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/ahrrri/find-angel/venv/bin/python -u -m src.core.pattern_generator --service
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/ahrrri/find-angel/logs/pattern-generator.log
+StandardError=append:/home/ahrrri/find-angel/logs/pattern-generator-error.log
+
+# 우선순위 및 리소스 제한 (가장 무거운 작업)
+Nice=12
+IOSchedulingClass=3
+MemoryMax=2G
+CPUQuota=40%
+
+[Install]
+WantedBy=multi-user.target

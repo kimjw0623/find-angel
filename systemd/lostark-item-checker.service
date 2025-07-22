@@ -8,15 +8,19 @@ Type=simple
 User=ahrrri
 WorkingDirectory=/home/ahrrri/find-angel
 Environment=PATH=/home/ahrrri/find-angel/venv/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/home/ahrrri/find-angel/venv/bin/python -m src.core.async_item_checker
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/ahrrri/find-angel/venv/bin/python -u -m src.core.async_item_checker
 Restart=always
 RestartSec=10
-StandardOutput=journal
-StandardError=journal
+StandardOutput=append:/home/ahrrri/find-angel/logs/item-checker.log
+StandardError=append:/home/ahrrri/find-angel/logs/item-checker-error.log
 
-# 리소스 제한 (필요시)
+# 우선순위 및 리소스 제한 (실시간성 중요)
+Nice=2
+IOSchedulingClass=2
+IOSchedulingPriority=2
 MemoryMax=1G
-CPUQuota=50%
+CPUQuota=60%
 
 [Install]
 WantedBy=multi-user.target

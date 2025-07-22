@@ -8,13 +8,17 @@ Type=simple
 User=ahrrri
 WorkingDirectory=/home/ahrrri/find-angel
 Environment=PATH=/home/ahrrri/find-angel/venv/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/home/ahrrri/find-angel/venv/bin/python -m src.core.async_price_collector
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/ahrrri/find-angel/venv/bin/python -u -m src.core.async_price_collector
 Restart=always
 RestartSec=10
-StandardOutput=journal
-StandardError=journal
+StandardOutput=append:/home/ahrrri/find-angel/logs/price-collector.log
+StandardError=append:/home/ahrrri/find-angel/logs/price-collector-error.log
 
-# 리소스 제한 (필요시)
+# 우선순위 및 리소스 제한
+Nice=8
+IOSchedulingClass=2
+IOSchedulingPriority=6
 MemoryMax=1G
 CPUQuota=50%
 

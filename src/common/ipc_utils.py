@@ -64,6 +64,9 @@ class IPCServer:
                     if response:
                         client_socket.send(json.dumps(response).encode('utf-8'))
                         
+        except BrokenPipeError:
+            # 클라이언트가 응답을 기다리지 않고 연결을 끊은 경우 (정상 상황)
+            pass
         except Exception as e:
             print(f"Error handling IPC client: {e}")
         finally:
@@ -84,7 +87,7 @@ class IPCClient:
         self.socket_path = socket_path
         
     def send_message(self, message_type: str, data: Dict[str, Any] = None, timeout: float = 1.0) -> Optional[Dict]:
-        """메시지 전송"""
+        """메시지 전송 (응답 대기)"""
         try:
             client_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             client_socket.settimeout(timeout)
@@ -117,10 +120,39 @@ class IPCClient:
             except:
                 pass
 
+    def send_notification(self, message_type: str, data: Dict[str, Any] = None, timeout: float = 0.5) -> bool:
+        """일방향 통지 전송 (응답 대기 안함)"""
+        try:
+            client_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client_socket.settimeout(timeout)
+            client_socket.connect(self.socket_path)
+            
+            message = {
+                'type': message_type,
+                'timestamp': datetime.now().isoformat(),
+                'data': data or {}
+            }
+            
+            client_socket.send(json.dumps(message).encode('utf-8'))
+            
+            # 즉시 연결 종료 (응답 대기하지 않음)
+            client_socket.shutdown(socket.SHUT_WR)  # 송신 종료
+            return True
+            
+        except Exception:
+            # 연결 실패는 정상적인 상황 (리스너가 없음)
+            return False
+        finally:
+            try:
+                client_socket.close()
+            except:
+                pass
+
 # 메시지 타입 상수
 class MessageTypes:
     PATTERN_UPDATED = "pattern_updated"
-    PATTERN_RELOAD_REQUEST = "pattern_reload_request"
+    PATTERN_RELOAD_REQUEST = "pattern_reload_request" 
+    COLLECTION_COMPLETED = "collection_completed"  # 새로 추가
     HEALTH_CHECK = "health_check"
 
 # 전역 IPC 클라이언트 (싱글톤)
@@ -133,10 +165,18 @@ def get_ipc_client() -> IPCClient:
         _ipc_client = IPCClient()
     return _ipc_client
 
-def notify_pattern_update(search_cycle_id: datetime):
-    """패턴 업데이트 알림 전송"""
+def notify_pattern_update(pattern_datetime: datetime):
+    """패턴 업데이트 알림 전송 (일방향)"""
     client = get_ipc_client()
-    return client.send_message(
+    return client.send_notification(
         MessageTypes.PATTERN_UPDATED,
-        {'search_cycle_id': search_cycle_id.isoformat()}
+        {'pattern_datetime': pattern_datetime.isoformat()}
+    )
+
+def notify_collection_completed(completion_datetime: datetime):
+    """데이터 수집 완료 알림 전송 (일방향)"""
+    client = get_ipc_client()
+    return client.send_notification(
+        MessageTypes.COLLECTION_COMPLETED,
+        {'completion_datetime': completion_datetime.isoformat()}
     )

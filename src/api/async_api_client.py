@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 import aiohttp
 import asyncio
 import time
@@ -8,7 +8,7 @@ class TokenBatchRequester:
     def __init__(self, tokens: List[str]):
         self.tokens = tokens
         self.MAX_REQUESTS_PER_MINUTE = 100
-        self.session = None
+        self.session: Optional[aiohttp.ClientSession] = None
         self.token_info = {
             token: {
                 'index': index,
@@ -18,12 +18,19 @@ class TokenBatchRequester:
             } for index, token in enumerate(tokens)
         }
 
-    def _token_info_str(self): 
+    async def __aenter__(self):
+        await self.initialize()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+
+    def _token_info_str(self) -> Dict[str, Dict[str, Any]]: 
         return {
             f"token {index}": self.token_info[token] for index, token in enumerate(self.token_info.keys())            
         }
 
-    async def initialize(self):
+    async def initialize(self) -> None:
         if self.session is None:
             # TCP 커넥션 풀 설정
             conn = aiohttp.TCPConnector(
@@ -47,12 +54,12 @@ class TokenBatchRequester:
                 timeout=timeout
             )
 
-    async def close(self):
+    async def close(self) -> None:
         if self.session:
             await self.session.close()
             self.session = None
 
-    def _update_token_info(self, token: str, success_headers_list: List[Dict[str, str]], rate_limited_headers_list: List[Dict[str, str]]):
+    def _update_token_info(self, token: str, success_headers_list: List[Dict[str, str]], rate_limited_headers_list: List[Dict[str, str]]) -> None:
         """여러 응답 헤더에서 가장 보수적인 rate limit 정보로 업데이트. 그런데 이렇게 잡아도 rate_limited가 발견되는 경우가 있는데, 왜인지 모르겠음"""
         try:
             # 현재 시간 기록
@@ -136,22 +143,21 @@ class TokenBatchRequester:
             next_reset = soon_available[0][2]
             wait_time = max(0, next_reset - current_time)
             if wait_time < 5:  # 5초 이내로 기다려도 되는 경우
-                time.sleep(wait_time + 0.1)  # 여유 있게 0.1초 추가
+                # 동기 sleep은 비동기 컨텍스트에서 블로킹을 일으킴
+                # 이 함수는 동기 함수이므로 여기서는 즉시 반환하고 상위에서 처리
                 return [(soon_available[0][0], soon_available[0][1])]
         
-        # 모든 토큰이 소진된 경우, 가장 빠른 리셋 시간까지 대기
+        # 모든 토큰이 소진된 경우
         if next_reset_times:
             next_reset = min(next_reset_times)
             wait_time = max(0, next_reset - current_time)
-            print(f"All tokens exhausted. Waiting {wait_time:.1f} seconds for next reset")
-            # print(f"Current token status: {self._token_info_str()}")
-            time.sleep(wait_time + 0.1)
-            return self._get_available_tokens()
+            print(f"All tokens exhausted. Need to wait {wait_time:.1f} seconds for next reset")
+            # 빈 리스트 반환으로 상위에서 대기 처리하도록 함
+            return []
             
         # 모든 토큰의 리셋 시간 정보가 없는 경우
-        print("No token reset information available. Waiting 60 seconds as fallback")
-        time.sleep(60)
-        return self._get_available_tokens()
+        print("No token reset information available")
+        return []
 
     async def process_requests(self, requests: List[Dict]) -> List[Dict]:
         """요청들을 토큰별 여유 용량에 따라 분배하여 처리"""
@@ -163,6 +169,8 @@ class TokenBatchRequester:
             # print(f"\nBefore using tokens...{self._token_info_str()}")
             available_tokens = self._get_available_tokens()
             if not available_tokens:
+                # 토큰이 없으면 잠시 대기 후 재시도
+                await asyncio.sleep(5)
                 continue
 
             processing_tasks = []
@@ -204,7 +212,7 @@ class TokenBatchRequester:
     async def _process_batch_with_indices(self, batch_requests: List[Dict], 
                                         batch_indices: List[int], 
                                         token: str, 
-                                        results: List[Dict]) -> Dict:
+                                        results: List[Dict]) -> Optional[Dict]:
         """배치 처리 및 결과 저장"""
         try:
             batch_results = await self._process_single_batch(batch_requests, token)
@@ -242,7 +250,7 @@ class TokenBatchRequester:
             print(f"Traceback:\n{traceback.format_exc()}")
             return {'retry_indices': batch_indices}
 
-    async def _process_single_batch(self, batch: List[Dict], token: str) -> List[Dict]:
+    async def _process_single_batch(self, batch: List[Dict], token: str) -> List[Any]:
         """단일 토큰으로 배치 처리"""
         headers = {
             'accept': 'application/json',
@@ -274,12 +282,15 @@ class TokenBatchRequester:
 
         return results
 
-    async def _make_single_request(self, headers: Dict, request_data: Dict) -> Dict:
+    async def _make_single_request(self, headers: Dict[str, str], request_data: Dict[str, Any]) -> Dict[str, Any]:
         """단일 요청 처리"""
         try:
             search_timestamp = datetime.now()
             # timeout을 더 길게 설정
-            async with self.session.post( # type: ignore
+            if self.session is None:
+                raise RuntimeError("Session not initialized. Call initialize() first.")
+                
+            async with self.session.post(
                 "https://developer-lostark.game.onstove.com/auctions/items",
                 headers=headers,
                 json=request_data,
@@ -294,8 +305,8 @@ class TokenBatchRequester:
                             'data': data,
                             'headers': dict(response.headers)
                         }
-                    except BaseException as e:
-                        print(f"Error parsing response: {str(e)}")
+                    except (aiohttp.ContentTypeError, ValueError) as e:
+                        print(f"Error parsing JSON response: {str(e)}")
                         return {
                             'status': 'error',
                             'error': f"JSON parse error: {str(e)}",
@@ -318,8 +329,15 @@ class TokenBatchRequester:
             # 취소된 경우 다시 raise하여 상위에서 처리
             raise
 
-        except BaseException as e:
-            print(f"Request error: {str(e)} ({type(e).__name__})")
+        except (aiohttp.ClientError, OSError) as e:
+            print(f"Network error: {str(e)} ({type(e).__name__})")
+            return {
+                'status': 'error',
+                'error': str(e),
+                'error_type': type(e).__name__
+            }
+        except Exception as e:
+            print(f"Unexpected error: {str(e)} ({type(e).__name__})")
             import traceback
             print(f"Traceback:\n{traceback.format_exc()}")
             return {

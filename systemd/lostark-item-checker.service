@@ -16,7 +16,7 @@ StandardOutput=append:/home/ahrrri/find-angel/logs/item-checker.log
 StandardError=append:/home/ahrrri/find-angel/logs/item-checker-error.log
 
 # 우선순위 및 리소스 제한 (실시간성 중요)
-Nice=2
+Nice=0
 IOSchedulingClass=2
 IOSchedulingPriority=2
 MemoryMax=1G

@@ -29,16 +29,29 @@ class AccessoryPricePattern(PatternBase):
     pattern_key = Column(String, nullable=False)
     role = Column(String, nullable=False)
     
-    # Multilinear regression 모델 데이터
-    intercept = Column(Float, nullable=False)          # 절편 (base_price)
-    coefficients = Column(SQLiteJSON, nullable=False)  # 계수 벡터 {feature_name: coefficient}
-    feature_names = Column(SQLiteJSON, nullable=False)  # 피처 순서 [힘민지, 깡공, ...]
+    # 모델 타입 및 기본 정보
+    model_type = Column(String, nullable=False, default='multilinear')  # 'multilinear' 또는 'minimum_price'
+    base_price = Column(Integer, nullable=False)       # 최저가 또는 기본 가격
     total_sample_count = Column(Integer, nullable=False)
+    r_squared = Column(Float, nullable=True)           # 모델 성능 지표
+    success_rate = Column(Float, nullable=True)        # 판매 성공률 (%)
+    sold_count = Column(Integer, nullable=True)        # 판매된 아이템 수
+    expired_count = Column(Integer, nullable=True)     # 만료된 아이템 수
+    
+    # Multilinear regression 모델 데이터 (model_type='multilinear'일 때만 사용)
+    intercept = Column(Float, nullable=True)           # 절편
+    coefficients = Column(SQLiteJSON, nullable=True)   # 계수 벡터 {feature_name: coefficient}
+    feature_names = Column(SQLiteJSON, nullable=True)  # 피처 순서 [힘민지, 깡공, ...]
     
     pattern = relationship("AuctionPricePattern", back_populates="accessory_patterns")
 
     __table_args__ = (
-        Index('idx_acc_pattern_search', 'pattern_datetime', 'grade', 'part', 'level', 'pattern_key', 'role'),
+        # 메인 검색용: 시간 + 기본 필터
+        Index('idx_acc_datetime_grade_part', 'pattern_datetime', 'grade', 'part', 'level'),
+        # 패턴 조회용: 역할별 패턴 검색
+        Index('idx_acc_pattern_role', 'grade', 'part', 'pattern_key', 'role'),
+        # 성능 분석용: R² 기준 정렬
+        Index('idx_acc_performance', 'r_squared', 'success_rate'),
     )
 
 class BraceletPricePattern(PatternBase):
@@ -51,11 +64,19 @@ class BraceletPricePattern(PatternBase):
     extra_slots = Column(String)
     price = Column(Integer, nullable=False)
     total_sample_count = Column(Integer, nullable=False)
+    success_rate = Column(Float, nullable=True)  # 판매 성공률 (%)
+    sold_count = Column(Integer, nullable=True)  # 판매된 아이템 수
+    expired_count = Column(Integer, nullable=True)  # 만료된 아이템 수
     
     pattern = relationship("AuctionPricePattern", back_populates="bracelet_patterns")
 
     __table_args__ = (
-        Index('idx_bracelet_pattern_search', 'pattern_datetime', 'grade', 'sorted_stats'),
+        # 메인 검색용: 시간 + 등급 + 스탯 패턴
+        Index('idx_bracelet_datetime_grade', 'pattern_datetime', 'grade', 'sorted_stats'),
+        # 성능 분석용: 판매 성공률 기준 정렬
+        Index('idx_bracelet_performance', 'success_rate', 'price'),
+        # 가격 범위 검색용: 등급별 가격 정렬
+        Index('idx_bracelet_price', 'grade', 'price'),
     )
 
 class PatternDatabaseManager(BaseDatabaseManager):

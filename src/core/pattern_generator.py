@@ -875,10 +875,7 @@ class PatternGenerator:
                 print(f"[{update_time.strftime('%H:%M')}] Collection signal detected, running full pattern generation...")
                 
                 # 실제 패턴 생성
-                success = self.update_pattern(
-                    pattern_datetime=self.last_collection_time,
-                    send_signal=True
-                )
+                success = self.update_pattern(send_signal=True)
                 
                 if success:
                     print(f"Pattern generation completed successfully")

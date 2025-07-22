@@ -30,7 +30,7 @@ class AsyncMarketScanner:
         # 20,000골드 이상일 때만 로깅
         if current_price >= 20000 or expected_price >= 20000:
             log_message = self._format_item_message(item, evaluation)
-            print(f"[VALUABLE] {log_message}")
+            print(f"{log_message}")
         
     async def scan_market(self):
         """시장 스캔 지속 실행"""
@@ -195,11 +195,8 @@ class AsyncMarketScanner:
                             if evaluation:
                                 # 가치 있는 아이템 로깅 (20,000골드 이상)
                                 self._log_valuable_item(item, evaluation)
-                                
-                                if evaluation["is_notable"]:
-                                    # notification hub로 직접 알림 전송
-                                    formatted_message = self._format_item_message(item, evaluation)
-                                    await self._send_to_notification_hub(item, evaluation, formatted_message)
+                                # formatted_message = self._format_item_message(item, evaluation)
+                                # await self._send_to_notification_hub(item, evaluation, formatted_message)
 
                     # 다음 배치로 이동
                     start_page += batch_size
@@ -270,7 +267,7 @@ class AsyncMarketScanner:
                 return (f"{evaluation['grade']} {item['Name']} | "
                     f"{evaluation['current_price']:,}골드 vs {evaluation['expected_price']:,}골드 "
                     f"({evaluation['price_ratio']*100:.1f}%) | "
-                    f"품질 {evaluation['quality']} | {evaluation['level']}연마 | "
+                    f"{evaluation['level']}연마 | "
                     f"만료 {end_date} | "
                     f"{options_str} | "
                     f"거래 {item['AuctionInfo']['TradeAllowCount']}회 | "
@@ -279,7 +276,7 @@ class AsyncMarketScanner:
                 return (f"{evaluation['grade']} {item['Name']} | "
                     f"{evaluation['current_price']:,}골드 vs {evaluation['expected_price']:,}골드 "
                     f"({evaluation['price_ratio']*100:.1f}%) | "
-                    f"고정 {evaluation.get('fixed_option_count', 0)} 부여 {int(evaluation.get('extra_option_count', 0))} | "
+                    f"부여 {int(evaluation.get('extra_option_count', 0))} | "
                     f"만료 {end_date} | "
                     f"{options_str}")
                     

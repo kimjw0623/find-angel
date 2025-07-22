@@ -10,7 +10,8 @@ import os
 from typing import Optional, Union
 import asyncio
 from src.database.base_database import BaseDatabaseManager
-from src.common.utils import fix_dup_options, number_to_scale
+from src.common.utils import fix_dup_options
+from src.common.config import config
 
 Base = declarative_base()
 
@@ -101,7 +102,7 @@ class BraceletCombatStat(Base):
     
     id = Column(Integer, primary_key=True)
     auction_bracelet_id = Column(Integer, ForeignKey('auction_bracelets.id'), index=True)
-    stat_type = Column(String, nullable=False)  # 특화/치명/신속
+    stat_type = Column(String, nullable=False)  # 특화/치명/신속/제압/인내/신속
     value = Column(Integer, nullable=False)
     
     auction_bracelet = relationship("AuctionBracelet", back_populates="combat_stats")
@@ -234,6 +235,59 @@ class RawDatabaseManager(BaseDatabaseManager):
         """팔찌 아이템들을 일괄 저장하고 상세 통계 반환"""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._sync_bulk_save_bracelets, raw_items)
+    
+    async def update_missing_items_status(self, collection_start_time: datetime):
+        """수집 완료 후 누락된 아이템들의 상태 업데이트"""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._sync_update_missing_items_status, collection_start_time)
+    
+    def _sync_update_missing_items_status(self, collection_start_time: datetime):
+        """
+        현재 ACTIVE 상태인 아이템들 중 이번 수집에서 발견되지 않은 아이템들의 상태 변경
+        - last_seen_at < collection_start_time인 아이템들이 대상
+        - end_time이 아직 안 지났으면 SOLD
+        - end_time이 지났으면 EXPIRED
+        """
+        current_time = datetime.now()
+        
+        stats = {'sold': 0, 'expired': 0}
+        
+        with self.get_write_session() as session:
+            # 악세서리 업데이트 - 이번 수집에서 발견되지 않은 아이템만
+            active_accessories = session.query(AuctionAccessory).filter(
+                AuctionAccessory.status == AuctionStatus.ACTIVE,
+                AuctionAccessory.last_seen_at < collection_start_time
+            ).all()
+            
+            for item in active_accessories:
+                if item.end_time and item.end_time > current_time:
+                    item.status = AuctionStatus.SOLD
+                    item.sold_at = current_time
+                    stats['sold'] += 1
+                else:
+                    item.status = AuctionStatus.EXPIRED
+                    stats['expired'] += 1
+                item.updated_at = current_time
+            
+            # 팔찌 업데이트 - 이번 수집에서 발견되지 않은 아이템만
+            active_bracelets = session.query(AuctionBracelet).filter(
+                AuctionBracelet.status == AuctionStatus.ACTIVE,
+                AuctionBracelet.last_seen_at < collection_start_time
+            ).all()
+            
+            for item in active_bracelets:
+                if item.end_time and item.end_time > current_time:
+                    item.status = AuctionStatus.SOLD
+                    item.sold_at = current_time
+                    stats['sold'] += 1
+                else:
+                    item.status = AuctionStatus.EXPIRED
+                    stats['expired'] += 1
+                item.updated_at = current_time
+            
+            session.commit()
+        
+        return stats
 
     def _sync_bulk_save_accessories(self, raw_items):
         """악세서리 아이템들을 동기 방식으로 일괄 저장"""
@@ -241,7 +295,9 @@ class RawDatabaseManager(BaseDatabaseManager):
         stats = {
             'total_items': len(raw_items),
             'existing_updated': 0,
-            'new_items_added': 0
+            'new_items_added': 0,
+            'sold': 0,
+            'expired': 0
         }
         
         with self.get_write_session() as session:
@@ -290,7 +346,7 @@ class RawDatabaseManager(BaseDatabaseManager):
                             record.base_stat = int(opt_value)  # type: ignore
                         elif option_name != "깨달음":
                             # ItemOption 추가
-                            opt_grade = number_to_scale.get(option_name, {}).get(opt_value, 1)
+                            opt_grade = config.number_to_scale.get(option_name, {}).get(opt_value, 1)
                             item_option = ItemOption(
                                 option_name=option_name,
                                 option_grade=opt_grade

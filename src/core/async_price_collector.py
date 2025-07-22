@@ -2,20 +2,18 @@ from typing import List
 from datetime import datetime, timedelta
 import asyncio
 from src.api.async_api_client import TokenBatchRequester
-from src.core.pattern_generator import PatternGenerator
 from src.database.raw_database import *
 from src.common.utils import *
 from src.common.config import config
-from src.common.utils import create_basic_search_request, add_search_option
+from src.common.ipc_utils import notify_collection_completed
 
 class AsyncPriceCollector:
     def __init__(self, db_manager: RawDatabaseManager, tokens: List[str]):
         self.db = db_manager
-        self.generator = PatternGenerator(self.db)
         self.requester = TokenBatchRequester(tokens)
         self.ITEMS_PER_PAGE = config.items_per_page
         
-    async def run(self, immediate=False, once=False):
+    async def run(self, immediate=False, once=False, noupdate=False):
         """메인 실행 함수"""
         first_run = True
         
@@ -24,25 +22,26 @@ class AsyncPriceCollector:
                 # 첫 실행시 immediate 옵션 확인
                 if first_run and immediate:
                     print("즉시 가격 수집을 시작합니다...")
-                else:
-                    # 다음 실행 시간까지 대기
-                    next_run = self._get_next_run_time()
-                    wait_seconds = (next_run - datetime.now()).total_seconds() + config.time_settings["safety_buffer_seconds"]
-                    if wait_seconds > 0:
-                        print(f"다음 실행 시간: {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
-                        print(f"대기 중... ({int(wait_seconds)}초)")
-                        await asyncio.sleep(wait_seconds)
+                elif not first_run:
+                    # 수집 완료 후 고정 간격 대기
+                    wait_minutes = config.time_settings.get("price_collection_interval_minutes", 2)
+                    wait_seconds = wait_minutes * 60
+                    print(f"{wait_minutes}분 대기 후 다음 수집을 시작합니다...")
+                    await asyncio.sleep(wait_seconds)
 
-                # 가격 수집 실행
-                start_time = datetime.now()
-                print(f"Starting price collection at {start_time}")
+                # 가격 수집 실행                
+                collection_end_time = await self.collect_prices()
                 
-                await self.collect_prices()
-                
-                end_time = datetime.now()
-                duration = end_time - start_time
-                print(f"Completed price collection at {end_time}")
-                print(f"Duration: {duration}")
+                # IPC 신호 발송 (패턴 생성 요청)
+                if not noupdate:
+                    print(f"\n📡 Sending collection completion signal to pattern generator...")
+                    result = notify_collection_completed(collection_end_time)
+                    if result:
+                        print(f"Signal sent successfully")
+                    else:
+                        print(f"No pattern generator service listening (this is normal if running standalone)")
+                else:
+                    print(f"Pattern generation skipped (noupdate=True)")
                 
                 # once 옵션이면 한 번만 실행 후 종료
                 if once:
@@ -66,11 +65,13 @@ class AsyncPriceCollector:
         print("리소스 정리 완료")
 
     async def collect_prices(self):
-        """비동기 가격 수집 (파이프라인 방식)"""
+        """비동기 가격 수집 (순차 처리)"""
         try:            
-            # 모든 수집 작업 생성
-            collection_tasks = []
+            start_time = datetime.now()
+            print(f"Starting price collection at {start_time}")
             
+            # 수집 시작 시간을 DB에 전달하기 위해 저장
+            self.collection_start_time = start_time
             # 장신구 수집 준비
             grades = ["고대", "유물"]
             accessory_parts = ["목걸이", "귀걸이", "반지"]
@@ -78,23 +79,39 @@ class AsyncPriceCollector:
             fixed_slots_list = [1, 2]
             extra_slots_list = [1, 2]
             
+            # 순차적으로 데이터 수집 실행
+            total_tasks = len(grades) * len(accessory_parts) * len(enhancement_levels) + len(grades) * len(fixed_slots_list) * len(extra_slots_list)
+            print(f"Starting {total_tasks} collection tasks sequentially...")
+            
+            results = []
+            task_count = 0
+            
             for grade in grades:
-                # 1. 목걸이/귀걸이/반지 수집 작업 생성
+                # 1. 목걸이/귀걸이/반지 순차 수집
                 for part in accessory_parts:
                     for enhancement_level in enhancement_levels:
-                        task = self._collect_and_save_accessory_data(grade, part, enhancement_level)
-                        collection_tasks.append(task)
+                        task_count += 1
+                        print(f"[{task_count:>2}/{total_tasks:>2}] Collecting {grade} {part:>4} {enhancement_level}연마", end='')
+                        try:
+                            result = await self._collect_and_save_accessory_data(grade, part, enhancement_level)
+                            results.append(result)
+                        except Exception as e:
+                            print(f" - Failed: {e}")
+                            results.append(e)
                 
-                # 2. 팔찌 수집 작업 생성
+                # 2. 팔찌 순차 수집
                 bonus_slots = 1 if grade == "고대" else 0
                 for fixed_slots in fixed_slots_list:
                     for extra_slots in extra_slots_list:
-                        task = self._collect_and_save_bracelet_data(grade, fixed_slots, extra_slots + bonus_slots)
-                        collection_tasks.append(task)
-
-            # 모든 작업을 파이프라인 방식으로 실행
-            print(f"Starting {len(collection_tasks)} collection tasks in pipeline...")
-            results = await asyncio.gather(*collection_tasks, return_exceptions=True)
+                        task_count += 1
+                        total_slots = extra_slots + bonus_slots
+                        print(f"[{task_count}/{total_tasks}] Collecting {grade} {'팔찌':>4} {fixed_slots}고정+{total_slots}부여", end='')
+                        try:
+                            result = await self._collect_and_save_bracelet_data(grade, fixed_slots, total_slots)
+                            results.append(result)
+                        except Exception as e:
+                            print(f" - Failed: {e}")
+                            results.append(e)
             
             # 결과 집계
             total_collected = 0
@@ -108,150 +125,27 @@ class AsyncPriceCollector:
 
             print(f"Total collected items: {total_collected}")
             
-            if total_collected > 0:
-                # 캐시 업데이트
-                print(f"\nStarting pattern update...")
-                update_start = datetime.now()
-                
-                current_cycle_id = datetime.now()
-                success = self.generator.update_pattern(current_cycle_id)
-                
-                update_end = datetime.now()
-                update_duration = (update_end - update_start).total_seconds()
-                
-                if success:
-                    print(f"Pattern update completed! Duration: {update_duration:.1f}s")
-                else:
-                    print(f"Pattern update failed! Duration: {update_duration:.1f}s")
+            # 사라진 아이템들의 상태 업데이트 (수집 시작 시간 전달)
+            print("\nUpdating status for missing items...")
+            update_stats = await self.db.update_missing_items_status(self.collection_start_time)
+            print(f"Updated item status - SOLD: {update_stats['sold']}, EXPIRED: {update_stats['expired']}")
+            
+            end_time = datetime.now()
+            duration = end_time - start_time
+            print(f"Completed price collection at {end_time}")
+            print(f"Duration: {duration}")
+            
+            return end_time  # 완료 시간 반환
                 
         except Exception as e:
             print(f"Error in price collection: {e}")
+            import traceback
+            traceback.print_exc()
+            return datetime.now()  # 오류 발생 시에도 현재 시간 반환
 
-    async def _collect_accessory_data(self, grade: str, part: str, enhancement_level: int) -> int:
-        """특정 등급/부위/연마 단계의 장신구 데이터 수집"""
-        total_collected = 0
-
-        # 1. 전체 페이지 수 확인
-        search_data = create_basic_search_request(grade, part, enhancement_level)
-        
-        # 페이지 수 확인을 위한 첫 요청
-        results = await self.requester.process_requests([search_data])
-        if not results[0]:
-            print(f"Failed to get initial data for {grade} {part} +{enhancement_level}연마")
-            return 0
-            
-        total_count = results[0].get('TotalCount', 0)
-        total_pages = min(1000, (total_count + self.ITEMS_PER_PAGE - 1) // self.ITEMS_PER_PAGE)
-        print(f"{grade} {part} {enhancement_level}연마: {total_count} items ({total_pages} pages)")
-
-        # 2. 모든 페이지 요청 생성
-        all_requests = [
-            create_basic_search_request(grade, part, enhancement_level, page_no=page)
-            for page in range(1, total_pages + 1)
-        ]
-
-        # 3. 모든 요청 처리
-        results = await self.requester.process_requests(all_requests)
-
-        # 4-5. 원시 응답에서 모든 아이템 수집하여 DB에 저장
-        all_raw_items = []
-        for result in results:
-            if result and not isinstance(result, Exception):
-                data = result
-                if data.get("Items"):
-                    search_timestamp = result.get('search_timestamp')
-                    # 유효한 아이템만 필터링
-                    valid_items = [
-                        (item, search_timestamp) for item in data["Items"]
-                        if item["AuctionInfo"]["BuyPrice"] and item["GradeQuality"] >= 67
-                    ]
-                    all_raw_items.extend(valid_items)
-
-        if all_raw_items:
-            print(f"Processing {grade} {part} {enhancement_level}연마 {len(all_raw_items)} items...")
-            stats = await self.db.bulk_save_accessories(all_raw_items)
-            total_collected = stats['new_items_added']
-            print(f"Stats: {stats['total_items']} total, {stats['existing_updated']} updated, {stats['new_items_added']} new")
-        else:
-            total_collected = 0
-
-        return total_collected
-
-    async def _collect_bracelet_data(self, grade: str, fixed_slots: int, extra_slots: int) -> int:
-        """특정 등급의 팔찌 데이터 수집 (고정/부여 효과 수량별)"""
-        
-        # 1. 전체 페이지 수 확인
-        search_data = create_basic_search_request(grade, "팔찌")
-        search_data["EtcOptions"] = [
-            add_search_option("팔찌 옵션 수량", "고정 효과 수량", fixed_slots),
-            add_search_option("팔찌 옵션 수량", "부여 효과 수량", extra_slots)
-        ]
-        
-        # 페이지 수 확인을 위한 첫 요청
-        results = await self.requester.process_requests([search_data])
-        if not results[0]:
-            print(f"Failed to get initial data for {grade} 팔찌 {fixed_slots}고정 {extra_slots}부여")
-            return 0
-            
-        total_count = results[0].get('TotalCount', 0)
-        total_pages = min(1000, (total_count + self.ITEMS_PER_PAGE - 1) // self.ITEMS_PER_PAGE)
-        print(f"{grade} 팔찌 {fixed_slots}고정 {extra_slots}부여: {total_count} items ({total_pages} pages)")
-
-        # 2. 모든 페이지 요청 생성  
-        bracelet_etc_options = [
-            add_search_option("팔찌 옵션 수량", "고정 효과 수량", fixed_slots),
-            add_search_option("팔찌 옵션 수량", "부여 효과 수량", extra_slots)
-        ]
-        
-        all_requests = []
-        for page in range(1, total_pages + 1):
-            search_data = create_basic_search_request(grade, "팔찌", page_no=page)
-            search_data["EtcOptions"] = bracelet_etc_options
-            all_requests.append(search_data)
-
-        # 3. 모든 요청 처리
-        results = await self.requester.process_requests(all_requests)
-
-        # 4-5. 원시 응답에서 모든 아이템 수집하여 DB에 저장
-        all_raw_items = []
-        for result in results:
-            if result and not isinstance(result, Exception):
-                data = result
-                if data.get("Items"):
-                    search_timestamp = result.get('search_timestamp')
-                    # 유효한 아이템만 필터링
-                    valid_items = [
-                        (item, search_timestamp) for item in data["Items"]
-                        if item["AuctionInfo"]["BuyPrice"]
-                    ]
-                    all_raw_items.extend(valid_items)
-
-        if all_raw_items:
-            print(f"Processing {grade} 팔찌 {fixed_slots}고정 {extra_slots}부여 {len(all_raw_items)} items...")
-            stats = await self.db.bulk_save_bracelets(all_raw_items)
-            total_collected = stats['new_items_added']
-            print(f"Stats: {stats['total_items']} total, {stats['existing_updated']} updated, {stats['new_items_added']} new")
-        else:
-            total_collected = 0
-
-        return total_collected
-
-    def _get_next_run_time(self) -> datetime:
-        """Calculate the next run time (every 30 minutes)"""
-        now = datetime.now()
-        
-        if now.minute >= 30:
-            # If it's past 30 minutes, go to the next hour
-            next_run = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-        else:
-            # Otherwise, go to the next 30 minutes
-            next_run = now.replace(minute=30, second=0, microsecond=0)
-            
-        if next_run <= now:
-            # If the next run time is in the past, go to the next 30 minutes
-            next_run += timedelta(minutes=30)
-            
-        return next_run
+    # 더 이상 사용하지 않는 메서드 (2분 고정 간격으로 변경)
+    # def _get_next_run_time(self) -> datetime:
+    #     """Calculate the next run time (every 10 minutes)"""
 
     async def _collect_and_save_accessory_data(self, grade: str, part: str, enhancement_level: int) -> int:
         """악세서리 데이터 수집과 저장을 하나의 파이프라인으로 처리"""
@@ -262,12 +156,12 @@ class AsyncPriceCollector:
             # 페이지 수 확인을 위한 첫 요청
             results = await self.requester.process_requests([search_data])
             if not results[0]:
-                print(f"Failed to get initial data for {grade} {part} +{enhancement_level}연마")
+                print(f"Failed to get initial data for {grade} {part:>4} +{enhancement_level}연마")
                 return 0
                 
             total_count = results[0].get('TotalCount', 0)
             total_pages = min(1000, (total_count + self.ITEMS_PER_PAGE - 1) // self.ITEMS_PER_PAGE)
-            print(f"{grade} {part} {enhancement_level}연마: {total_count} items ({total_pages} pages)")
+            print(f": {total_count:>5} items ({total_pages:>4} pages)...", end='', flush=True)
 
             # 2. 모든 페이지 요청 생성 및 실행
             all_requests = [
@@ -292,15 +186,15 @@ class AsyncPriceCollector:
 
             # 4. 데이터 저장 (요청과 병렬로 처리됨)
             if all_raw_items:
-                print(f"Processing {grade} {part} {enhancement_level}연마 {len(all_raw_items)} items...")
                 stats = await self.db.bulk_save_accessories(all_raw_items)
-                print(f"Stats: {stats['total_items']} total, {stats['existing_updated']} updated, {stats['new_items_added']} new")
+                print(f"{len(all_raw_items):>5} valid total, {stats['existing_updated']:>5} updated, {stats['new_items_added']:>5} new")
                 return stats['new_items_added']
             else:
+                print(f"0 valid total, 0 updated, 0 new")
                 return 0
                 
         except Exception as e:
-            print(f"Error collecting {grade} {part} {enhancement_level}연마: {e}")
+            print(f" - Error: {e}")
             return 0
 
     async def _collect_and_save_bracelet_data(self, grade: str, fixed_slots: int, extra_slots: int) -> int:
@@ -321,7 +215,7 @@ class AsyncPriceCollector:
                 
             total_count = results[0].get('TotalCount', 0)
             total_pages = min(1000, (total_count + self.ITEMS_PER_PAGE - 1) // self.ITEMS_PER_PAGE)
-            print(f"{grade} 팔찌 {fixed_slots}고정 {extra_slots}부여: {total_count} items ({total_pages} pages)")
+            print(f": {total_count:>5} items ({total_pages:>4} pages)...", end='', flush=True)
 
             # 2. 모든 페이지 요청 생성 및 실행
             bracelet_etc_options = [
@@ -352,15 +246,15 @@ class AsyncPriceCollector:
 
             # 4. 데이터 저장 (요청과 병렬로 처리됨)
             if all_raw_items:
-                print(f"Processing {grade} 팔찌 {fixed_slots}고정 {extra_slots}부여 {len(all_raw_items)} items...")
                 stats = await self.db.bulk_save_bracelets(all_raw_items)
-                print(f"Stats: {stats['total_items']} total, {stats['existing_updated']} updated, {stats['new_items_added']} new")
+                print(f"{len(all_raw_items):>5} valid total, {stats['existing_updated']:>5} updated, {stats['new_items_added']:>5} new")
                 return stats['new_items_added']
             else:
+                print(f"0 valid total, 0 updated, 0 new")
                 return 0
                 
         except Exception as e:
-            print(f"Error collecting {grade} 팔찌 {fixed_slots}고정 {extra_slots}부여: {e}")
+            print(f" - Error: {e}")
             return 0
 
 
@@ -372,11 +266,13 @@ async def main():
                        help='즉시 첫 번째 가격 수집 실행')
     parser.add_argument('--once', action='store_true',
                        help='한 번만 실행 후 종료')
+    parser.add_argument('--noupdate', action='store_true',
+                       help='패턴 업데이트 하지 않음')
     args = parser.parse_args()
     
     db_manager = RawDatabaseManager()   
     collector = AsyncPriceCollector(db_manager, tokens=config.price_tokens)
-    await collector.run(immediate=args.immediate, once=args.once)
+    await collector.run(immediate=args.immediate, once=args.once, noupdate=args.noupdate)
 
 if __name__ == "__main__":
     asyncio.run(main())

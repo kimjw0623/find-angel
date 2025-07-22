@@ -19,7 +19,10 @@ from src.database.pattern_database import (
     AccessoryPricePattern, BraceletPricePattern
 )
 from src.common.config import config
-from src.common.utils import calculate_base_stat_ratio, calculate_reasonable_price, extract_common_option_features
+from src.common.utils import (
+    normalize_base_stat_value, calculate_reasonable_price, extract_common_option_features,
+    create_accessory_pattern_key, create_bracelet_pattern_key
+)
 
 @contextmanager
 def redirect_stdout(file_path, mode='a'):
@@ -54,6 +57,10 @@ class PatternGenerator:
         self.pattern_db = PatternDatabaseManager()  # 패턴 데이터베이스
         self.debug = debug
         self.is_generating = False  # 패턴 생성 중 플래그
+        
+        # 15분 간격 스케줄링을 위한 변수들
+        self.collection_signal_received = False  # 데이터 수집 완료 신호 플래그
+        self.last_collection_time = None         # 마지막 데이터 수집 시간
        
         # Config에서 설정 가져오기
         self.EXCLUSIVE_OPTIONS = config.exclusive_options
@@ -269,7 +276,8 @@ class PatternGenerator:
             support_groups = {}
 
             for accessory in active_accessories:
-                dealer_key, support_key = self._classify_accessory_patterns(accessory)
+                dealer_key = create_accessory_pattern_key(accessory, "dealer")
+                support_key = create_accessory_pattern_key(accessory, "support")
 
                 # 딜러용 그룹 추가
                 if dealer_key not in dealer_groups:
@@ -286,7 +294,8 @@ class PatternGenerator:
             support_historical_groups = {}
 
             for accessory in historical_accessories:
-                dealer_key, support_key = self._classify_accessory_patterns(accessory)
+                dealer_key = create_accessory_pattern_key(accessory, "dealer")
+                support_key = create_accessory_pattern_key(accessory, "support")
 
                 # 딜러용 그룹 추가
                 if dealer_key not in dealer_historical_groups:
@@ -362,7 +371,7 @@ class PatternGenerator:
             # 팔찌 그룹화 (가격 계산용)
             bracelet_groups = {}
             for bracelet in bracelets:
-                cache_key = self._classify_bracelet_patterns(bracelet)
+                cache_key = create_bracelet_pattern_key(bracelet)
                 if cache_key not in bracelet_groups:
                     bracelet_groups[cache_key] = []
                 bracelet_groups[cache_key].append(bracelet)
@@ -370,7 +379,7 @@ class PatternGenerator:
             # 판매 성공률 계산용 그룹화
             bracelet_historical_groups = {}
             for bracelet in historical_bracelets:
-                cache_key = self._classify_bracelet_patterns(bracelet)
+                cache_key = create_bracelet_pattern_key(bracelet)
                 if cache_key not in bracelet_historical_groups:
                     bracelet_historical_groups[cache_key] = []
                 bracelet_historical_groups[cache_key].append(bracelet)
@@ -386,111 +395,6 @@ class PatternGenerator:
             print(f"Generated {len(result)} total bracelet patterns")
 
         return result
-
-    def _classify_accessory_patterns(self, accessory: AuctionAccessory) -> tuple[str, str]:
-        """악세서리의 옵션을 분석하여 딜러용/서포터용 cache_key를 생성"""
-        dealer_options = []
-        support_options = []
-        
-        if accessory.part not in self.EXCLUSIVE_OPTIONS:
-            # 기본 키 생성
-            base_key = f"{accessory.grade}:{accessory.part}:{accessory.level}:base"
-            return base_key, base_key
-        
-        part_options = self.EXCLUSIVE_OPTIONS[accessory.part] # type: ignore
-        
-        for option in accessory.raw_options:
-            option_name = option.option_name
-            option_value = option.option_value
-            
-            # 딜러용 옵션 확인
-            if "dealer" in part_options and option_name in part_options["dealer"]:
-                dealer_options.append((option_name, option_value))
-            
-            # 서포터용 옵션 확인
-            if "support" in part_options and option_name in part_options["support"]:
-                support_options.append((option_name, option_value))
-        
-        # 키 생성
-        dealer_key = f"{accessory.grade}:{accessory.part}:{accessory.level}:{sorted(dealer_options)}" if dealer_options else f"{accessory.grade}:{accessory.part}:{accessory.level}:base"
-        support_key = f"{accessory.grade}:{accessory.part}:{accessory.level}:{sorted(support_options)}" if support_options else f"{accessory.grade}:{accessory.part}:{accessory.level}:base"
-        
-        return dealer_key, support_key
-
-    def _classify_bracelet_patterns(self, bracelet: AuctionBracelet) -> str:
-        """팔찌 패턴 분류 및 cache_key 생성 (새로운 분류 체계)"""
-        
-        # 유효 스탯들 정의
-        valid_combat_stats = ["치명", "특화", "신속"]
-        jeinsuk_stats = ["제압", "인내", "숙련"]
-        valid_base_stats = ["힘", "민첩", "지능"]
-        
-        # 전투 특성 분류
-        valid_combat = []  # 유효한 전투 특성
-        jeinsuk_combat = []  # 제압/인내/숙련
-        invalid_combat = []  # 잡옵
-        
-        for stat in bracelet.combat_stats:
-            stat_value = float(stat.value) if stat.value is not None else 0.0
-            if stat_value > 0:  # 값이 있는 것만 고려
-                if stat.stat_type in valid_combat_stats:
-                    valid_combat.append((stat.stat_type, stat_value))
-                elif stat.stat_type in jeinsuk_stats:
-                    jeinsuk_combat.append((stat.stat_type, stat_value))
-                else:
-                    invalid_combat.append((stat.stat_type, stat_value))
-        
-        # 기본 스탯 분류
-        valid_base = []
-        for stat in bracelet.base_stats:
-            stat_value = float(stat.value) if stat.value is not None else 0.0
-            if stat_value > 0 and stat.stat_type in valid_base_stats:
-                valid_base.append((stat.stat_type, stat_value))
-        
-        # 공격속도 효과 확인 및 값 추출
-        speed_value = 0
-        if bracelet.special_effects:
-            for effect in bracelet.special_effects:
-                if "공격 및 이동 속도 증가" in str(effect.effect_type):
-                    # 공격속도 값이 있다면 사용, 없으면 1
-                    if hasattr(effect, 'value') and effect.value:
-                        speed_value = float(effect.value)
-                    else:
-                        speed_value = 1
-                    break
-        
-        # 정렬된 스탯 리스트 생성 (키 유일성 확보)
-        all_stats = []
-        
-        # 유효한 전투 특성 추가 (반올림 적용)
-        for stat_name, stat_value in valid_combat:
-            rounded_value = self._round_combat_stat(bracelet.grade, stat_value)
-            all_stats.append((stat_name, rounded_value))
-        
-        # 유효한 기본 특성 추가 (반올림 적용)
-        for stat_name, stat_value in valid_base:
-            rounded_value = self._round_base_stat(bracelet.grade, stat_value)
-            all_stats.append((stat_name, rounded_value))
-        
-        # 공격속도 추가 (실제 값 사용)
-        if speed_value > 0:
-            all_stats.append(("공이속", int(speed_value)))
-        
-        # 제인숙 스탯 추가 (모두 "제인숙"으로 통합, 값은 0)
-        for stat_name, _ in jeinsuk_combat:
-            all_stats.append(("제인숙", 0))
-        
-        # 잡옵 스탯 추가 (값은 0으로 통일)
-        for stat_name, _ in invalid_combat:
-            all_stats.append(("잡옵", 0))
-        
-        # 정렬: 스탯명 기준으로 정렬 (값이 동일할 때 일관성 확보)
-        sorted_stats = tuple(sorted(all_stats, key=lambda x: (x[0], x[1])))
-        
-        # cache_key 생성: "grade:sorted_stats:extra_slots"
-        cache_key = f"{bracelet.grade}:{sorted_stats}:{bracelet.extra_option_count}"
-        
-        return cache_key
 
     def _calculate_accessory_group_prices(self, items: List[AuctionAccessory], exclusive_key: str, role: str, historical_items: List[AuctionAccessory] = None) -> Optional[Dict]:
         """그룹의 가격 통계 계산 - Multilinear Regression 모델"""
@@ -550,7 +454,7 @@ class PatternGenerator:
         for item in filtered_items:
             if item.price and item.status in [AuctionStatus.ACTIVE, AuctionStatus.SOLD]:
                 # 피처 벡터 추출
-                features = extract_common_option_features(item, role, config)
+                features = extract_common_option_features(item, role)
                 
                 # feature_names 순서대로 피처 벡터 생성
                 feature_vector = []
@@ -865,6 +769,144 @@ class PatternGenerator:
                 return adjusted_thresholds[max(0, adjusted_thresholds.index(threshold) - 1)]
         return adjusted_thresholds[-1]
     
+    def _get_next_15min_schedule(self) -> datetime:
+        """다음 15분 간격 스케줄 시간 계산 (정각 기준)"""
+        now = datetime.now()
+        # 현재 시간에서 분을 15분 단위로 올림
+        minutes = now.minute
+        next_15min = ((minutes // 15) + 1) * 15
+        
+        if next_15min >= 60:
+            # 다음 시간
+            next_time = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        else:
+            # 같은 시간
+            next_time = now.replace(minute=next_15min, second=0, microsecond=0)
+        
+        return next_time
+    
+    def _copy_latest_pattern(self, new_pattern_datetime: datetime) -> bool:
+        """가장 최근 패턴을 복사해서 새 시간으로 저장"""
+        try:
+            with self.pattern_db.get_write_session() as session:
+                # 가장 최근 활성 패턴 찾기
+                latest_pattern = session.query(AuctionPricePattern).filter_by(
+                    is_active=True
+                ).order_by(AuctionPricePattern.pattern_datetime.desc()).first()
+                
+                if not latest_pattern:
+                    print("No existing pattern to copy")
+                    return False
+                
+                print(f"Copying latest pattern from {latest_pattern.pattern_datetime} to {new_pattern_datetime}")
+                
+                # 기존 활성 패턴들을 비활성화
+                session.query(AuctionPricePattern).filter_by(is_active=True).update({'is_active': False})
+                
+                # 새 메인 패턴 생성
+                new_pattern = AuctionPricePattern(
+                    pattern_datetime=new_pattern_datetime,
+                    is_active=True
+                )
+                session.add(new_pattern)
+                session.flush()
+                
+                # 악세서리 패턴들 복사
+                accessory_patterns = session.query(AccessoryPricePattern).filter_by(
+                    pattern_datetime=latest_pattern.pattern_datetime
+                ).all()
+                
+                for old_pattern in accessory_patterns:
+                    new_accessory_pattern = AccessoryPricePattern(
+                        pattern_datetime=new_pattern_datetime,
+                        grade=old_pattern.grade,
+                        part=old_pattern.part,
+                        level=old_pattern.level,
+                        pattern_key=old_pattern.pattern_key,
+                        role=old_pattern.role,
+                        model_type=old_pattern.model_type,
+                        base_price=old_pattern.base_price,
+                        total_sample_count=old_pattern.total_sample_count,
+                        r_squared=old_pattern.r_squared,
+                        success_rate=old_pattern.success_rate,
+                        sold_count=old_pattern.sold_count,
+                        expired_count=old_pattern.expired_count,
+                        intercept=old_pattern.intercept,
+                        coefficients=old_pattern.coefficients,
+                        feature_names=old_pattern.feature_names
+                    )
+                    session.add(new_accessory_pattern)
+                
+                # 팔찌 패턴들 복사
+                bracelet_patterns = session.query(BraceletPricePattern).filter_by(
+                    pattern_datetime=latest_pattern.pattern_datetime
+                ).all()
+                
+                for old_pattern in bracelet_patterns:
+                    new_bracelet_pattern = BraceletPricePattern(
+                        pattern_datetime=new_pattern_datetime,
+                        grade=old_pattern.grade,
+                        sorted_stats=old_pattern.sorted_stats,
+                        extra_slots=old_pattern.extra_slots,
+                        price=old_pattern.price,
+                        total_sample_count=old_pattern.total_sample_count,
+                        success_rate=old_pattern.success_rate,
+                        sold_count=old_pattern.sold_count,
+                        expired_count=old_pattern.expired_count
+                    )
+                    session.add(new_bracelet_pattern)
+                
+                session.commit()
+                print(f"Pattern copied successfully: {len(accessory_patterns)} accessory + {len(bracelet_patterns)} bracelet patterns")
+                return True
+                
+        except Exception as e:
+            print(f"Error copying latest pattern: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    def _scheduled_pattern_update(self):
+        """15분 간격 스케줄에 따른 패턴 업데이트"""
+        try:
+            update_time = datetime.now()
+            
+            if self.collection_signal_received and self.last_collection_time:
+                print(f"[{update_time.strftime('%H:%M')}] Collection signal detected, running full pattern generation...")
+                
+                # 실제 패턴 생성
+                success = self.update_pattern(
+                    pattern_datetime=self.last_collection_time,
+                    send_signal=True
+                )
+                
+                if success:
+                    print(f"Pattern generation completed successfully")
+                else:
+                    print(f"Pattern generation failed")
+                
+                # 플래그 리셋
+                self.collection_signal_received = False
+                self.last_collection_time = None
+                
+            else:
+                print(f"[{update_time.strftime('%H:%M')}] No collection signal, copying latest pattern...")
+                
+                # 최근 패턴 복사
+                success = self._copy_latest_pattern(update_time)
+                
+                if success:
+                    # 패턴 업데이트 신호 발송
+                    self._send_pattern_update_signal(update_time, update_time)
+                    print(f"Latest pattern copied successfully")
+                else:
+                    print(f"Failed to copy latest pattern")
+                    
+        except Exception as e:
+            print(f"Error in scheduled pattern update: {e}")
+            import traceback
+            traceback.print_exc()
+    
     def run_service(self):
         """IPC 서비스 모드로 실행 (무한 대기)"""
         import time
@@ -877,30 +919,27 @@ class PatternGenerator:
         ipc_server = IPCServer(service_name="pattern_generator")
         
         def handle_collection_completed(message):
-            """데이터 수집 완료 신호 처리"""
+            """데이터 수집 완료 신호 처리 - 15분 스케줄링 방식"""
             try:
                 completion_time_str = message['data']['completion_datetime']
                 completion_time = datetime.fromisoformat(completion_time_str)
                 
                 print(f"Received collection completion signal: {completion_time.isoformat()}")
+                print("Signal queued for next scheduled update (every 15 minutes)")
                 
-                # 이미 패턴 생성 중인지 체크
-                if self.is_generating:
-                    print(f"Pattern generation already in progress, ignoring signal")
-                    return {'status': 'ignored', 'message': 'Pattern generation already in progress'}
+                # 플래그 설정 (즉시 실행하지 않음)
+                self.collection_signal_received = True
+                self.last_collection_time = completion_time
                 
-                # 패턴 생성 실행
-                success = self.update_pattern(
-                    pattern_datetime=completion_time,
-                    send_signal=True
-                )
+                # 다음 스케줄 시간 출력
+                next_schedule = self._get_next_15min_schedule()
+                print(f"Next scheduled update: {next_schedule.strftime('%H:%M')}")
                 
-                if success:
-                    print(f"Pattern generation completed successfully")
-                    return {'status': 'success', 'message': 'Pattern generated'}
-                else:
-                    print(f"Pattern generation failed")
-                    return {'status': 'error', 'message': 'Pattern generation failed'}
+                return {
+                    'status': 'queued', 
+                    'message': 'Collection signal queued for next scheduled update',
+                    'next_schedule': next_schedule.isoformat()
+                }
                     
             except Exception as e:
                 print(f"Error handling collection completion: {e}")
@@ -935,11 +974,29 @@ class PatternGenerator:
             ipc_server.start_server()
             print("IPC server started")
             print("Pattern Generator Service is ready!")
-            print("Waiting for collection completion signals...")
+            print("15-minute scheduled pattern updates enabled")
             
-            # 메인 루프
+            # 다음 스케줄 시간 계산
+            next_schedule_time = self._get_next_15min_schedule()
+            print(f"Next scheduled update: {next_schedule_time.strftime('%H:%M')}")
+            
+            # 메인 루프 - 15분 간격 스케줄링
             while is_running[0]:
-                time.sleep(1)
+                current_time = datetime.now()
+                
+                # 스케줄 시간이 되었는지 체크 (1분 여유)
+                if current_time >= next_schedule_time:
+                    print(f"\n=== Scheduled Update Trigger ({current_time.strftime('%H:%M')}) ===")
+                    
+                    # 스케줄된 패턴 업데이트 실행
+                    self._scheduled_pattern_update()
+                    
+                    # 다음 스케줄 시간 계산
+                    next_schedule_time = self._get_next_15min_schedule()
+                    print(f"Next scheduled update: {next_schedule_time.strftime('%H:%M')}")
+                    print("=== Waiting for signals ===\n")
+                
+                time.sleep(30)  # 30초마다 체크
                 
         except KeyboardInterrupt:
             print("\nReceived interrupt signal")

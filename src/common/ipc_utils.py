@@ -160,7 +160,9 @@ class IPCClient:
 class MessageTypes:
     PATTERN_UPDATED = "pattern_updated"
     PATTERN_RELOAD_REQUEST = "pattern_reload_request" 
-    COLLECTION_COMPLETED = "collection_completed"  # 새로 추가
+    COLLECTION_COMPLETED = "collection_completed"
+    PLAYER_DATA_UPDATE = "player_data_update"  # 플레이어 데이터 업데이트
+    ITEM_FOUND = "item_found"  # 매물 발견 알림
     HEALTH_CHECK = "health_check"
 
 # 전역 IPC 클라이언트 관리 (서비스별)

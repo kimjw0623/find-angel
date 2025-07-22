@@ -94,8 +94,6 @@ class Config:
             "ancient_slot_bonus": 1,
             "ancient_combat_stat_bonus": 20,
             "ancient_base_stat_bonus": 3200,
-            "combat_stat_search_values": [40, 50, 60, 70, 80, 90],
-            "base_stat_search_values": [6400, 8000, 9600, 11200],
             "combat_stat_thresholds": [40, 50, 60, 70, 80, 90],  # 전투 특성 구간
             "base_stat_thresholds": [6400, 8000, 9600, 11200],   # 기본 스탯 구간
             "stat_thresholds": {
@@ -114,6 +112,26 @@ class Config:
             }
         }
               
+        # 아이템 체커 설정
+        self.item_checker_settings = {
+            "scan_interval_seconds": 1,           # 스캔 주기
+            "batch_size_3day": 5,                 # 3일 매물 배치 크기
+            "batch_size_1day": 10,                # 1일 매물 배치 크기
+            "start_page_1day": 500,               # 1일 매물 시작 페이지
+            "search_params": {
+                "ItemLevelMin": 0,
+                "ItemLevelMax": 1800,
+                "ItemTier": 4,
+                "CategoryCode": 200000,
+                "Sort": "EXPIREDATE",
+                "SortCondition": "DESC"
+            },
+            "time_offsets": {
+                "expire_3day_offset_minutes": 3,  # 3일 매물 시간 오프셋
+                "expire_1day_offset_minutes": 1   # 1일 매물 시간 오프셋
+            }
+        }
+        
         # Discord 설정
         self.discord_settings = {
             "ephemeral_flag": 1 << 12,

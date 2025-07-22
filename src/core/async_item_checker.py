@@ -21,6 +21,16 @@ class AsyncMarketScanner:
         self.last_expireDate_1day = None
         self.last_page_index_1day = None
         self._initial_1day_page_found = False
+    
+    def _log_valuable_item(self, item: Dict, evaluation: Dict):
+        """가치 있는 아이템 로깅 (20,000골드 이상) - systemd가 stdout 처리"""
+        current_price = evaluation.get('current_price', 0)
+        expected_price = evaluation.get('expected_price', 0)
+        
+        # 20,000골드 이상일 때만 로깅
+        if current_price >= 20000 or expected_price >= 20000:
+            log_message = self._format_item_message(item, evaluation)
+            print(f"[VALUABLE] {log_message}")
         
     async def scan_market(self):
         """시장 스캔 지속 실행"""
@@ -182,10 +192,14 @@ class AsyncMarketScanner:
                             
                             count += 1
                             evaluation = self.evaluator.evaluate_item(item)
-                            if evaluation and evaluation["is_notable"]:
-                                # notification hub로 직접 알림 전송
-                                formatted_message = self._format_item_message(item, evaluation)
-                                await self._send_to_notification_hub(item, evaluation, formatted_message)
+                            if evaluation:
+                                # 가치 있는 아이템 로깅 (20,000골드 이상)
+                                self._log_valuable_item(item, evaluation)
+                                
+                                if evaluation["is_notable"]:
+                                    # notification hub로 직접 알림 전송
+                                    formatted_message = self._format_item_message(item, evaluation)
+                                    await self._send_to_notification_hub(item, evaluation, formatted_message)
 
                     # 다음 배치로 이동
                     start_page += batch_size
@@ -218,24 +232,54 @@ class AsyncMarketScanner:
     def _format_item_message(self, item: Dict, evaluation: Dict) -> str:
         """아이템 메시지 포맷팅 (간단한 텍스트 형태)"""
         try:
-            options_str = ' '.join([f"{opt['OptionName']}{opt['Value']}" for opt in item["Options"] 
-                                if opt["OptionName"] not in ["깨달음", "도약"]])
+            # 옵션 문자열 생성 (힘민지 개선)
+            options_list = []
+            base_stat_names = ["힘", "민첩", "지능"]
+            base_stat_value = None
+            
+            # 먼저 힘민지 값 찾기
+            for opt in item["Options"]:
+                if opt["OptionName"] in base_stat_names:
+                    base_stat_value = opt["Value"]
+                    break  # 첫 번째로 찾은 값 사용
+            
+            # 힘민지 옵션 추가
+            if base_stat_value is not None:
+                options_list.append(f"힘민지{base_stat_value}")
+            
+            # 다른 옵션들 추가 (힘민지 제외)
+            for opt in item["Options"]:
+                if opt["OptionName"] in ["깨달음", "도약"] or opt["OptionName"] in base_stat_names:
+                    continue
+                options_list.append(f"{opt['OptionName']}{opt['Value']}")
+            
+            options_str = ' '.join(options_list)
             
             end_date = item["AuctionInfo"]["EndDate"]
             
             if evaluation["type"] == "accessory":
+                # 패턴 정보는 이제 evaluation에 포함됨
+                dealer_key_short = evaluation.get('dealer_pattern_key', '').split(':')[-1]
+                support_key_short = evaluation.get('support_pattern_key', '').split(':')[-1]
+                model_info = evaluation.get('model_info', 'none')
+                
+                pattern_info = (f"D[{dealer_key_short}]:{evaluation['dealer_price']:,} | "
+                              f"S[{support_key_short}]:{evaluation['support_price']:,} | "
+                              f"USE[{evaluation['usage_type']}] | MODEL[{model_info}]")
+                
                 return (f"{evaluation['grade']} {item['Name']} | "
                     f"{evaluation['current_price']:,}골드 vs {evaluation['expected_price']:,}골드 "
                     f"({evaluation['price_ratio']*100:.1f}%) | "
                     f"품질 {evaluation['quality']} | {evaluation['level']}연마 | "
                     f"만료 {end_date} | "
                     f"{options_str} | "
-                    f"거래 {item['AuctionInfo']['TradeAllowCount']}회")
+                    f"거래 {item['AuctionInfo']['TradeAllowCount']}회 | "
+                    f"{pattern_info}")
             else:  # 팔찌
                 return (f"{evaluation['grade']} {item['Name']} | "
                     f"{evaluation['current_price']:,}골드 vs {evaluation['expected_price']:,}골드 "
                     f"({evaluation['price_ratio']*100:.1f}%) | "
-                    f"고정 {evaluation['fixed_option_count']} 부여 {int(evaluation['extra_option_count'])} | "
+                    f"고정 {evaluation.get('fixed_option_count', 0)} 부여 {int(evaluation.get('extra_option_count', 0))} | "
                     f"만료 {end_date} | "
                     f"{options_str}")
                     
@@ -244,9 +288,9 @@ class AsyncMarketScanner:
             return f"매물 발견: {item.get('Name', 'Unknown')} - {evaluation.get('current_price', 0):,}골드"
 
 class AsyncMarketMonitor:
-    def __init__(self, tokens: List[str], debug: bool = False):
+    def __init__(self, tokens: List[str]):
         # 로컬 evaluator 초기화
-        evaluator = ItemEvaluator(debug=debug)
+        evaluator = ItemEvaluator()
         
         self.scanner = AsyncMarketScanner(evaluator, tokens)
         
@@ -309,7 +353,7 @@ class AsyncMarketMonitor:
 
 async def main():
     try:
-        monitor = AsyncMarketMonitor(tokens=config.monitor_tokens, debug=False)
+        monitor = AsyncMarketMonitor(tokens=config.monitor_tokens)
         
         print("Item Checker Starting...")
         print("IPC Server: Listening for pattern updates")

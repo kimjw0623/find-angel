@@ -1,313 +1,94 @@
 import time
-import threading
 import numpy as np
-import os
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple, Any
-from src.database.raw_database import *
-from src.common.utils import *
-from src.core.pattern_reader import PatternReader
-from sqlalchemy.orm import aliased
+from src.database.pattern_database import (
+    PatternDatabaseManager, AuctionPricePattern,
+    AccessoryPricePattern, BraceletPricePattern
+)
+from src.common.utils import (
+    fix_dup_options, create_accessory_pattern_key, create_bracelet_pattern_key,
+    extract_common_option_features
+)
+from src.common.config import config
 
 class ItemEvaluator:
     def __init__(self, debug=False):
         self.debug = debug
-        self.pattern_reader = PatternReader(debug=debug)
-        self.last_check_time = self.pattern_reader.get_last_update_time()
+        self.pattern_db = PatternDatabaseManager()
         
-        # IPC 서버 설정
-        self._setup_ipc_server()
-        
-        # 캐시 업데이트 체크 스레드 시작 (백업용)
-        self._stop_flag = threading.Event()
-        self._update_check_thread = threading.Thread(
-            target=self._check_cache_updates,
-            name="CacheUpdateChecker"
-        )
-        self._update_check_thread.daemon = True
-        self._update_check_thread.start()
-    
-    def _setup_ipc_server(self):
-        """IPC 서버 설정 및 메시지 핸들러 등록"""
-        try:
-            from src.common.ipc_utils import IPCServer, MessageTypes
-            
-            self.ipc_server = IPCServer(service_name="item_checker")
-            
-            # 패턴 업데이트 메시지 핸들러 등록
-            self.ipc_server.register_handler(
-                MessageTypes.PATTERN_UPDATED,
-                self._handle_pattern_update_message
-            )
-            
-            # 헬스체크 핸들러 등록
-            self.ipc_server.register_handler(
-                MessageTypes.HEALTH_CHECK,
-                self._handle_health_check
-            )
-            
-            # 서버 시작
-            self.ipc_server.start_server()
-            
-        except Exception as e:
-            print(f"Warning: Failed to setup IPC server: {e}")
-            self.ipc_server = None
-    
-    def _handle_pattern_update_message(self, message):
-        """패턴 업데이트 메시지 처리"""
-        try:
-            search_cycle_id_str = message['data']['search_cycle_id']
-            search_cycle_id = datetime.fromisoformat(search_cycle_id_str)
-            
-            print(f"🔔 Pattern update notification received via IPC: {search_cycle_id}")
-            
-            # 패턴 업데이트 시간 갱신
-            self.last_check_time = search_cycle_id
-            
-            print("✅ Patterns reloaded via IPC notification")
-            
-            return {'status': 'reloaded', 'timestamp': datetime.now().isoformat()}
-            
-        except Exception as e:
-            print(f"Error processing pattern update message: {e}")
-            return {'status': 'error', 'message': str(e)}
-    
-    def _handle_health_check(self, message):
-        """헬스체크 메시지 처리"""
-        return {
-            'status': 'healthy',
-            'last_check_time': self.last_check_time.isoformat() if self.last_check_time else None,
-            'timestamp': datetime.now().isoformat()
+        # 메모리 캐시
+        self._cached_patterns = {
+            'accessory': {},  # {(grade, part, level, role, pattern_key): pattern}
+            'bracelet': {},   # {(grade, sorted_stats, extra_slots): pattern}
+            'pattern_datetime': None
         }
-
-    def _check_cache_updates(self):
-        """주기적으로 캐시 파일 업데이트 확인 (백업용)"""
-        while not self._stop_flag.is_set():
-            try:
-                cache_update_time = self.pattern_reader.get_last_update_time()
+        
+        # 초기 패턴 로드
+        self._load_active_patterns()
+        
+    def _load_active_patterns(self):
+        """활성 패턴을 메모리에 로드"""
+        try:
+            with self.pattern_db.get_read_session() as session:
+                # 활성 패턴 조회
+                active_pattern = session.query(AuctionPricePattern).filter_by(
+                    is_active=True
+                ).first()
                 
-                # 캐시 파일이 더 최신이면 리로드 (IPC 알림을 놓친 경우 대비)
-                if (cache_update_time and 
-                    (not self.last_check_time or cache_update_time > self.last_check_time)):
-                    print(f"📅 Fallback: New cache update detected: {cache_update_time}")
+                if not active_pattern:
+                    if self.debug:
+                        print("No active pattern found")
+                    return
+                
+                pattern_datetime = active_pattern.pattern_datetime
+                
+                # 이미 같은 패턴이 로드되어 있으면 스킵
+                if self._cached_patterns['pattern_datetime'] == pattern_datetime:
+                    return
                     
-                    # 패턴 업데이트 확인
-                    self.last_check_time = cache_update_time
-                    
-                    print("✅ Patterns reloaded via fallback check")
-            
-            except Exception as e:
                 if self.debug:
-                    print(f"Error in fallback cache check: {e}")
-            
-            # 5분마다 체크 (IPC가 있으므로 긴 주기로)
-            time.sleep(300)
-            
-    def _get_reference_options(self, item: Dict, part: str) -> Dict[str, Any]:
-        """
-        아이템의 옵션들을 타입별로 분류
-        
-        분류 기준:
-        - dealer_exclusive: 각 부위별 딜러 전용 특수 옵션
-        * 목걸이: 추피/적주피
-        * 귀걸이: 공퍼/무공퍼
-        * 반지: 치적/치피
-        
-        - dealer_bonus: 딜러용 보너스 옵션
-        * 깡공, 깡무공
-        
-        - support_exclusive: 각 부위별 서포터 전용 특수 옵션
-        * 목걸이: 아덴게이지/낙인력
-        * 귀걸이: 무공퍼
-        * 반지: 아공강/아피강
-        
-        - support_bonus: 서포터용 보너스 옵션
-        * 최생, 최마, 아군회복, 아군보호막, 깡무공
-        
-        - base_info: 품질, 거래 가능 횟수 등 기본 정보
-        """
-        reference_options = {
-            "dealer_exclusive": [],    
-            "dealer_bonus": [],       
-            "support_exclusive": [],   
-            "support_bonus": [],      
-            "base_info": {
-                "quality": item["GradeQuality"],
-                "trade_count": item["AuctionInfo"]["TradeAllowCount"],
-            }
-        }
-
-        for opt in item["Options"]:
-            opt_name = opt["OptionName"]
-            if opt_name in ["깨달음", "도약"]:
-                continue
-
-            # 딜러 전용 옵션
-            if ((part == "목걸이" and opt_name in ["추피", "적주피"]) or
-                (part == "귀걸이" and opt_name in ["공퍼", "무공퍼"]) or
-                (part == "반지" and opt_name in ["치적", "치피"])):
-                reference_options["dealer_exclusive"].append((opt_name, opt["Value"]))
-            
-            # 서포터 전용 옵션
-            if ((part == "목걸이" and opt_name in ["아덴게이지", "낙인력"]) or
-                (part == "귀걸이" and opt_name == "무공퍼") or  # 귀걸이 무공퍼 추가
-                (part == "반지" and opt_name in ["아공강", "아피강"])):
-                reference_options["support_exclusive"].append((opt_name, opt["Value"]))
-            
-            # 딜러용 보너스 옵션
-            if opt_name in ["깡공", "깡무공"]:
-                reference_options["dealer_bonus"].append((opt_name, opt["Value"]))
-            
-            # 서포터용 보너스 옵션
-            if opt_name in ["최생", "최마", "아군회복", "아군보호막", "깡무공"]:
-                reference_options["support_bonus"].append((opt_name, opt["Value"]))
-
-        if self.debug:
-            print("\nClassified options:")
-            for key, value in reference_options.items():
-                if key != "base_info":
-                    print(f"{key}: {value}")
-                else:
-                    print(f"{key}: {reference_options['base_info']}")
-
-        return reference_options
-    
-    def _estimate_dealer_price(self, reference_options: Dict[str, Any], quality: int,
-                            price_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        딜러용 가격 추정 및 상세 계산 내역 반환
-        """
-        # 기본 가격
-        quality_cut = (quality // 10) * 10
-        quality_prices = price_data['quality_prices']
-        result = {
-            'base_price': quality_prices[quality_cut],
-            'options': {},
-            'final_price': quality_prices[quality_cut]
-        }
-
-        # 딜러용 보너스 옵션 가치 계산
-        for opt_name, opt_value in reference_options["dealer_bonus"]:
-            common_values = price_data.get('common_option_values', {})
-            if opt_name in common_values and common_values[opt_name]:
-                try:
-                    valid_values = [float(v) for v in common_values[opt_name].keys() 
-                                if float(v) <= opt_value]
-                    if valid_values:
-                        closest_value = max(valid_values)
-                        additional_value = common_values[opt_name][closest_value]
-                        result['options'][opt_name] = {
-                            'value': opt_value,
-                            'price': additional_value
-                        }
-                        result['final_price'] += additional_value
-                except ValueError:
-                    if self.debug:
-                        print(f"No cached values found for {opt_name} {opt_value}")
-                    continue
-
-        result['final_price'] = max(int(result['final_price']), 1)
-        return result
-    
-    def _estimate_support_price(self, reference_options: Dict[str, Any], quality: int,
-                            price_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        서포터용 가격 추정 및 상세 계산 내역 반환
-        """
-        # 기본 가격
-        quality_cut = (quality // 10) * 10
-        quality_prices = price_data['quality_prices']
-        result = {
-            'base_price': quality_prices[quality_cut],
-            'options': {},
-            'final_price': quality_prices[quality_cut]
-        }
-
-        # 서포터용 보너스 옵션 가치 계산
-        for opt_name, opt_value in reference_options["support_bonus"]:
-            common_values = price_data.get('common_option_values', {})
-            if opt_name in common_values and common_values[opt_name]:
-                try:
-                    valid_values = [float(v) for v in common_values[opt_name].keys() 
-                                if float(v) <= opt_value]
-                    if valid_values:
-                        closest_value = max(valid_values)
-                        additional_value = common_values[opt_name][closest_value]
-                        result['options'][opt_name] = {
-                            'value': opt_value,
-                            'price': additional_value
-                        }
-                        result['final_price'] += additional_value
-                except ValueError:
-                    if self.debug:
-                        print(f"No cached values found for {opt_name} {opt_value}")
-                    continue
-
-        result['final_price'] = max(int(result['final_price']), 1)
-        return result
-
-    def _estimate_acc_price(self, item: Dict, grade: str, part: str, level: int) -> Dict[str, Any]:
-        """
-        악세서리 가격 추정 및 상세 계산 내역 반환
-        """
-        try:
-            if self.debug:
-                print(f"\n=== Price Estimation Debug ===")
-                print(f"Item: {grade} {part} (Level {level})")
-                print(f"Quality: {item['GradeQuality']}")
-                print("Options:")
-                for opt in item["Options"]:
-                    if opt["OptionName"] not in ["깨달음", "도약"]:
-                        print(f"  - {opt['OptionName']}: {opt['Value']}")
-
-            # 옵션 분류
-            reference_options = self._get_reference_options(item, part)
-        
-            # 현재 즉구가
-            current_price = item["AuctionInfo"]["BuyPrice"]
-
-            # 캐시된 가격 데이터 조회
-            price_data = self.pattern_reader.get_price_data(grade, part, level, reference_options)
-
-            # 딜러용/서포터용 가격 추정 - 상세 내역 포함
-            dealer_details = self._estimate_dealer_price(reference_options, int(item['GradeQuality']), price_data["dealer"])
-            support_details = self._estimate_support_price(reference_options, int(item['GradeQuality']), price_data["support"])
-
-            result = {
-                'dealer_details': dealer_details,
-                'support_details': support_details,
-                'has_dealer_options': bool(reference_options["dealer_exclusive"] or reference_options["dealer_bonus"]),
-                'has_support_options': bool(reference_options["support_exclusive"] or reference_options["support_bonus"]),
-            }
-
-            # 최종 타입과 가격 결정
-            if dealer_details['final_price'] > support_details['final_price']:
-                result.update({
-                    'type': '딜러',
-                    'price': dealer_details['final_price']
-                })
-            else:
-                result.update({
-                    'type': '서폿',
-                    'price': support_details['final_price']
-                })
-
-            return result
-
+                    print(f"Loading patterns for {pattern_datetime}")
+                
+                # 캐시 초기화
+                self._cached_patterns = {
+                    'accessory': {},
+                    'bracelet': {},
+                    'pattern_datetime': pattern_datetime
+                }
+                
+                # 악세서리 패턴 로드
+                accessory_patterns = session.query(AccessoryPricePattern).filter_by(
+                    pattern_datetime=pattern_datetime
+                ).all()
+                
+                for pattern in accessory_patterns:
+                    key = (pattern.grade, pattern.part, pattern.level, pattern.role, pattern.pattern_key)
+                    self._cached_patterns['accessory'][key] = pattern
+                
+                # 팔찌 패턴 로드
+                bracelet_patterns = session.query(BraceletPricePattern).filter_by(
+                    pattern_datetime=pattern_datetime
+                ).all()
+                
+                for pattern in bracelet_patterns:
+                    key = (pattern.grade, pattern.sorted_stats, pattern.extra_slots or '')
+                    self._cached_patterns['bracelet'][key] = pattern
+                
+                if self.debug:
+                    print(f"Loaded {len(accessory_patterns)} accessory patterns, {len(bracelet_patterns)} bracelet patterns")
+                    
         except Exception as e:
             if self.debug:
-                print(f"Error in price estimation: {str(e)}")
+                print(f"Error loading patterns: {e}")
                 import traceback
                 traceback.print_exc()
-            return {
-                'type': 'dealer' if any(opt[0] in ["추피", "적주피", "공퍼", "무공퍼", "치적", "치피"] 
-                                    for opt in reference_options["dealer_exclusive"]) else 'support',
-                'price': current_price,
-                'dealer_details': {'final_price': current_price} if reference_options["dealer_exclusive"] else None,
-                'support_details': {'final_price': current_price} if reference_options["support_exclusive"] else None,
-                'has_dealer_options': bool(reference_options["dealer_exclusive"]),
-                'has_support_options': bool(reference_options["support_exclusive"]),
-            }
+                
+    def refresh_patterns(self):
+        """패턴 캐시 강제 리프레시"""
+        if self.debug:
+            print("Refreshing pattern cache...")
+        self._load_active_patterns()
 
     def evaluate_item(self, item: Dict) -> Optional[Dict]:
         """
@@ -324,139 +105,154 @@ class ItemEvaluator:
             return self._evaluate_accessory(item)
 
     def _evaluate_accessory(self, item: Dict) -> Optional[Dict]:
-        grade = item["Grade"]
-        level = len(item["Options"]) - 1
-
-        # 파트 확인
-        if "목걸이" in item["Name"]:
-            part = "목걸이"
-        elif "귀걸이" in item["Name"]:
-            part = "귀걸이"
-        elif "반지" in item["Name"]:
-            part = "반지"
-        else:
-            return None
-
+        """악세서리 평가 - 새로운 multilinear regression 기반"""
         # 기본 검증
         if item["GradeQuality"] < 67:
             return None
 
-        # 가격 추정 (상세 내역 포함)
-        estimate_result = self._estimate_acc_price(item, grade, part, level)
+        try:
+            # 패턴이 없으면 평가 불가
+            if not self._cached_patterns['pattern_datetime']:
+                if self.debug:
+                    print("No active pattern found")
+                return None
 
-        current_price = item["AuctionInfo"]["BuyPrice"]
-        expected_price = estimate_result["price"]
-        price_ratio = current_price / expected_price
-        profit = expected_price - current_price
+            # 역할별로 pattern_key 생성 및 grade, part, level 추출
+            dealer_pattern_key = create_accessory_pattern_key(item, "dealer")
+            support_pattern_key = create_accessory_pattern_key(item, "support")
+            
+            # pattern_key에서 grade, part, level 추출
+            # 형식: "grade:part:level:options" 또는 "grade:part:level:base"
+            dealer_parts = dealer_pattern_key.split(":")
+            grade, part, level = dealer_parts[0], dealer_parts[1], int(dealer_parts[2])
+            
+            # 캐시에서 패턴 조회
+            dealer_key = (grade, part, level, "dealer", dealer_pattern_key)
+            support_key = (grade, part, level, "support", support_pattern_key)
+            
+            dealer_pattern = self._cached_patterns['accessory'].get(dealer_key)
+            support_pattern = self._cached_patterns['accessory'].get(support_key)
 
-        return {
-            "type": "accessory",
-            "grade": grade,
-            "part": part,
-            "level": level,
-            "quality": item["GradeQuality"],
-            "current_price": current_price,
-            "expected_price": expected_price,
-            "price_ratio": price_ratio,
-            "profit": profit,
-            "usage_type": estimate_result["type"],
-            "price_details": {
-                "딜러": estimate_result["dealer_details"],
-                "서폿": estimate_result["support_details"]
-            },
-            "has_dealer_options": estimate_result["has_dealer_options"],
-            "has_support_options": estimate_result["has_support_options"],
-            "is_notable": self._is_notable_accessory(level, current_price, expected_price, price_ratio)
-        }
+            # 가격 계산
+            dealer_price = self._calculate_accessory_price(item, [dealer_pattern] if dealer_pattern else [], part, "dealer")
+            support_price = self._calculate_accessory_price(item, [support_pattern] if support_pattern else [], part, "support")
+
+            current_price = item["AuctionInfo"]["BuyPrice"]
+            
+            # 더 높은 가격을 예상 가격으로 사용
+            if dealer_price > support_price:
+                expected_price = dealer_price
+                usage_type = "딜러"
+            else:
+                expected_price = support_price
+                usage_type = "서폿"
+
+            price_ratio = current_price / expected_price if expected_price > 0 else float('inf')
+            profit = expected_price - current_price
+
+            return {
+                "type": "accessory",
+                "grade": grade,
+                "part": part,
+                "level": level,
+                "quality": item["GradeQuality"],
+                "current_price": current_price,
+                "expected_price": expected_price,
+                "price_ratio": price_ratio,
+                "profit": profit,
+                "usage_type": usage_type,
+                "dealer_price": dealer_price,
+                "support_price": support_price,
+                "is_notable": self._is_notable_accessory(level, current_price, expected_price, price_ratio)
+            }
+
+        except Exception as e:
+            if self.debug:
+                print(f"Error evaluating accessory: {e}")
+                import traceback
+                traceback.print_exc()
+            return None
+
+    def _calculate_accessory_price(self, item: Dict, patterns: List, part: str, role: str) -> int:
+        """악세서리 가격 계산 - multilinear regression 또는 minimum price"""
+        if not patterns:
+            return 1000  # 기본값
+            
+        # 처첫 번째 패턴만 사용 (보통 하나만 있음)
+        pattern = patterns[0]
+        
+        if pattern.model_type == 'minimum_price':
+            # 최저가 모델
+            return pattern.base_price
+        elif pattern.model_type == 'multilinear' and pattern.intercept is not None:
+            # multilinear regression 모델: intercept + Σ(coefficient × feature_value)
+            price = pattern.intercept
+            
+            # 피처별 가격 추가
+            if pattern.coefficients and pattern.feature_names:
+                feature_values = extract_common_option_features(item, role)
+                for feature_name, coefficient in pattern.coefficients.items():
+                    if feature_name in feature_values:
+                        price += coefficient * feature_values[feature_name]
+            
+            return max(int(price), 1)
+        else:
+            # fallback
+            return pattern.base_price if pattern.base_price else 1000
+
 
     def _evaluate_bracelet(self, item: Dict) -> Optional[Dict]:
-        """팔찌 평가"""
+        """팔찌 평가 - sorted_stats 기반 매칭"""
         grade = item["Grade"]
         current_price = item["AuctionInfo"]["BuyPrice"]
 
-        # 기본 정보 추출
-        fixed_option_count = 0  # 처음부터 카운트
-        extra_option_count = 0
-        combat_stats = []
-        base_stats = []
-        special_effects = []
+        try:
+            # 패턴이 없으면 평가 불가
+            if not self._cached_patterns['pattern_datetime']:
+                if self.debug:
+                    print("No active pattern found for bracelet")
+                return None
+            
+            # 팔찌 pattern_key 생성
+            cache_key = create_bracelet_pattern_key(item)
+            grade, sorted_stats, extra_slots = cache_key.split(':', 2)
+            
+            # 캐시에서 매칭되는 팔찌 패턴 찾기
+            bracelet_key = (grade, sorted_stats, extra_slots)
+            bracelet_pattern = self._cached_patterns['bracelet'].get(bracelet_key)
 
-        for option in item["Options"]:
-            # 깨달음/도약은 건너뛰기
-            if option["OptionName"] in ["깨달음", "도약"]:
-                continue
-                
-            # 부여 효과 수량만 따로 처리하고, 나머지는 모두 고정 효과로 카운트
-            if option["Type"] == "BRACELET_RANDOM_SLOT":
-                extra_option_count = int(option["Value"])
-            else:
-                fixed_option_count += 1  # 모든 다른 옵션은 고정 효과로 카운트
-                
-                # 옵션 종류별 분류
-                if option["Type"] == "STAT":
-                    if option["OptionName"] in ["특화", "치명", "신속"]:
-                        combat_stats.append((option["OptionName"], option["Value"]))
-                    elif option["OptionName"] in ["힘", "민첩", "지능"]:
-                        base_stats.append((option["OptionName"], option["Value"]))
-                    else: # special_effect는 아닌데 의미는 없음(제인숙, 체력)
-                        special_effects.append((option["OptionName"], option["Value"]))
-                else:
-                    special_effects.append((option["OptionName"], option["Value"]))
+            if not bracelet_pattern:
+                # 매칭되는 패턴이 없으면 높은 가격일 때만 로그
+                if current_price > 5000:
+                    if self.debug:
+                        print(f"{grade} {item['Name']} | {current_price:,}골드 vs ?? | 만료 {item['AuctionInfo']['EndDate']} | {sorted_stats}")
+                return None
 
-        # print(grade, fixed_option_count, extra_option_count, combat_stats, base_stats, special_effects)
-        # 캐시된 가격 데이터를 사용하여 예상 가격 계산
-        item_data = {
-            'grade': grade,
-            'fixed_option_count': fixed_option_count,
-            'extra_option_count': extra_option_count,
-            'combat_stats': combat_stats,
-            'base_stats': base_stats,
-            'special_effects': special_effects
-        }
-        
-        bracelet_result = self.pattern_reader.get_bracelet_price(grade, item_data)
-        expected_price = None
-        if bracelet_result:
-            expected_price, total_sample_count = bracelet_result
+                expected_price = bracelet_pattern.price
+                price_ratio = current_price / expected_price if expected_price > 0 else float('inf')
+                profit = expected_price - current_price
 
-        if not expected_price:
-            if current_price > 5000:
-                # print(f"팔찌값 산출 실패 {item_data}")
-                stats_str = []
-                # 전투 특성
-                for stat_type, value in combat_stats:
-                    stats_str.append(f"{stat_type}{value}")
-                # 기본 스탯
-                for stat_type, value in base_stats:
-                    stats_str.append(f"{stat_type}{value}")
-                # 특수 효과 (이제 (이름, 값) 튜플)
-                for effect_name, effect_value in special_effects:
-                    stats_str.append(f"{effect_name}{effect_value}")
-                # 부여 효과 수량 추가
-                stats_str.append(f"부여 효과 수량{extra_option_count}")
-                # print(item["Options"])
-                print(f"{grade} {item['Name']} | {current_price:,}골드 vs ?? | 고정 {fixed_option_count} 부여 {extra_option_count} | 만료 {item['AuctionInfo']['EndDate']} | {' '.join(stats_str)}")
+                return {
+                    "type": "bracelet",
+                    "grade": grade,
+                    "current_price": current_price,
+                    "expected_price": expected_price,
+                    "price_ratio": price_ratio,
+                    "profit": profit,
+                    "extra_option_count": int(extra_slots) if extra_slots.isdigit() else 0,
+                    "sorted_stats": sorted_stats,
+                    "is_notable": self._is_notable_bracelet(current_price, expected_price, price_ratio),
+                }
+
+        except Exception as e:
+            if self.debug:
+                print(f"Error evaluating bracelet: {e}")
+                import traceback
+                traceback.print_exc()
             return None
 
-        price_ratio = current_price / expected_price
-        profit = expected_price - current_price
-
-        return {
-            "type": "bracelet",
-            "grade": grade,
-            "current_price": current_price,
-            "expected_price": expected_price,
-            "price_ratio": price_ratio,
-            "profit": profit,
-            "fixed_option_count": fixed_option_count,
-            "extra_option_count": extra_option_count,
-            "combat_stats": combat_stats,
-            "base_stats": base_stats,
-            "special_effects": special_effects,
-            "is_notable": self._is_notable_bracelet(current_price, expected_price, price_ratio),
-        }
-
     def _sigmoid(self, expected_price: int) -> float:
+        """수익성 판단을 위한 시그모이드 함수"""
         min_ratio = 0.5
         max_ratio = 0.75
         max_price = 400000
@@ -469,20 +265,12 @@ class ItemEvaluator:
         self, level: int, current_price: int, expected_price: int, price_ratio: float
     ) -> bool:
         """악세서리가 주목할 만한지 판단"""
-        # if level >= 3 and expected_price > 60000 and price_ratio < 0.6:
-        #     return True
-        # if level < 3 and expected_price > 40000 and price_ratio < 0.45:
-        #     return True
-        # return False
         if expected_price > 20000 and current_price < self._sigmoid(expected_price):
             return True
         return False
 
     def _is_notable_bracelet(self, current_price: int, expected_price: int, price_ratio: float) -> bool:
         """팔찌가 주목할 만한지 판단"""
-        # if expected_price > 50000 and price_ratio < 0.7:
-        #     return True
-        # return False
         if expected_price > 20000 and current_price < self._sigmoid(expected_price):
             return True
         return False

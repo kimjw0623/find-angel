@@ -23,8 +23,6 @@ class Config:
         self.items_per_page = 10
         self.max_pages_per_search = 1000
         
-        # 캐시 업데이트 설정
-        self.cache_update_interval_hours = 24
         self.search_cycle_delay_seconds = 2
         
         # 가격 평가 설정
@@ -33,10 +31,6 @@ class Config:
             "sigmoid_params": {
                 "x0": 0.625,  # sigmoid 중심점
                 "k": 10       # sigmoid 가파름 정도
-            },
-            "quality_thresholds": {
-                "ancient": [70, 80, 90, 95, 98, 100],
-                "relic": [30, 50, 70, 80, 90, 100]
             }
         }
         
@@ -102,6 +96,8 @@ class Config:
             "ancient_base_stat_bonus": 3200,
             "combat_stat_search_values": [40, 50, 60, 70, 80, 90],
             "base_stat_search_values": [6400, 8000, 9600, 11200],
+            "combat_stat_thresholds": [40, 50, 60, 70, 80, 90],  # 전투 특성 구간
+            "base_stat_thresholds": [6400, 8000, 9600, 11200],   # 기본 스탯 구간
             "stat_thresholds": {
                 "combat_stats": {
                     "legendary": 100,
@@ -117,15 +113,7 @@ class Config:
                 }
             }
         }
-        
-        # API 검색 설정
-        self.api_search_settings = {
-            "item_level_min": 0,
-            "item_level_max": 1800,
-            "item_tier": 4,
-            "max_pages_per_search": 1000
-        }
-        
+              
         # Discord 설정
         self.discord_settings = {
             "ephemeral_flag": 1 << 12,
@@ -173,7 +161,9 @@ class Config:
         self.pattern_generator_settings = {
             "min_regression_samples": 10,  # Linear regression 최소 샘플 수
             "min_common_option_samples": 10,  # Common option 분석 최소 샘플 수
-            "quality_thresholds": [60, 70, 80, 90],  # 품질 임계값들 (레거시)
+            "min_r_squared_threshold": 0.5,  # R-squared 최소 임계값 (이하는 최저가 모델 사용)
+            "min_feature_correlation": 0.1,  # 피처별 최소 상관계수 (이하는 피처 제외)
+            "success_rate_window_days": 30,  # 판매 성공률 계산 기간 (일)
         }
         
         # 역할별 전용 옵션 설정 (Exclusive Options)
@@ -208,31 +198,7 @@ class Config:
             "support": ["힘민지", "깡무공", "최생", "최마", "아군회복", "아군보호막"]
         }
         
-        # 게임 데이터 상수들
-        self._load_game_constants()
-
-    def _load_tokens_by_prefix(self, prefix: str) -> List[str]:
-        """특정 프리픽스를 가진 토큰들을 로드"""
-        tokens = [value for key, value in os.environ.items() 
-                 if key.startswith(prefix)]
-        
-        if not tokens:
-            raise ValueError(f"No tokens found with prefix {prefix}")
-            
-        return tokens
-    
-    def _load_webhooks(self) -> Dict[str, str]:
-        """Discord 웹훅 URL들을 로드"""
-        webhooks = {}
-        for key, value in os.environ.items():
-            if key.startswith('WEBHOOK'):
-                # WEBHOOK1 -> webhook1, WEBHOOK -> webhook
-                webhook_name = key.lower()
-                webhooks[webhook_name] = value
-        return webhooks
-    
-    def _load_game_constants(self):
-        """게임 내 고정 데이터들을 로드"""
+        # 게임 데이터 상수들 (인라인으로 정의)
         
         # 옵션값 → 스케일 매핑 (하/중/상옵)
         self.number_to_scale = {
@@ -330,15 +296,26 @@ class Config:
             "깡무공": {"195.0": 0.061, "480.0": 0.151, "960.0": 0.302},
             "품질": {"목걸이": 0.00785*0.5, "귀걸이": 0.00610*0.5, "반지": 0.00567*0.5}
         }
+
+    def _load_tokens_by_prefix(self, prefix: str) -> List[str]:
+        """특정 프리픽스를 가진 토큰들을 로드"""
+        tokens = [value for key, value in os.environ.items() 
+                 if key.startswith(prefix)]
         
-        # 연마 보정값
-        self.level_enpoint = {
-            "고대": {0: 0, 1: 2, 2: 5, 3: 9},
-            "유물": {0: 0, 1: 1, 2: 3, 3: 6},
-        }
-        
-        # 목걸이 전용 옵션 리스트
-        self.necklace_only_list = ["추피", "적주피", "아덴게이지", "낙인력"]
+        if not tokens:
+            raise ValueError(f"No tokens found with prefix {prefix}")
+            
+        return tokens
+    
+    def _load_webhooks(self) -> Dict[str, str]:
+        """Discord 웹훅 URL들을 로드"""
+        webhooks = {}
+        for key, value in os.environ.items():
+            if key.startswith('WEBHOOK'):
+                # WEBHOOK1 -> webhook1, WEBHOOK -> webhook
+                webhook_name = key.lower()
+                webhooks[webhook_name] = value
+        return webhooks
 
 # 싱글톤 인스턴스 생성
 config = Config()
